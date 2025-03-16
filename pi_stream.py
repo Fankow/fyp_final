@@ -20,7 +20,7 @@ def disconnect():
     print("Disconnected from server")
 
 # Replace with your ngrok URL after starting ngrok
-sio.connect('https://7b25-218-102-205-108.ngrok-free.app')  # Update to ngrok URL later
+sio.connect('https://db9d-218-102-205-108.ngrok-free.app')  # Update to ngrok URL later
 
 # Load YOLOv11 model
 model = YOLO("best.pt")

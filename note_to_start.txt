@@ -2,7 +2,7 @@
 STEPS FOR RUNNING THE WEB ONLINE (NOT LOCALLY)
 1.run backend code
 2.ngrok http 3000
-3.copy url and run frontend npm run build
+3.copy url and run frontend npm run build (now need to change the .env file inside the backend folder in order to change the ngrok url)
 4.copy url and run python3 pi_stream.py
 
 TODO:

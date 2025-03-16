@@ -2,8 +2,10 @@ import React, { useState, useEffect, useRef } from "react";
 import "./VideoPlayer.css";
 
 function VideoPlayer({ videoUrl, apiBaseUrl }) {
+  
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+// eslint-disable-next-line
   const [isPlaying, setIsPlaying] = useState(false);
   const videoRef = useRef(null);
 
