@@ -21,7 +21,7 @@ app.use(
   })
 );
 
-// Socket.IO setup optimized for ngrok
+// Socket.IO setup optimized for ngrok and cross-version compatibility
 const io = new Server(server, {
   cors: {
 <<<<<<< HEAD
@@ -42,6 +42,9 @@ app.use(express.static(path.join(__dirname, "../frontend/build")));
   },
   allowEIO3: true,
   pingTimeout: 60000,
+  pingInterval: 25000,  // Add this line
+  path: "/socket.io",   // Make sure path is explicit
+  serveClient: false    // Don't serve client files
 });
 
 // Google Drive API setup
