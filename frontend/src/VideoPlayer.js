@@ -5,7 +5,7 @@ function VideoPlayer({ videoUrl, apiBaseUrl }) {
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-// eslint-disable-next-line
+  // eslint-disable-next-line
   const [isPlaying, setIsPlaying] = useState(false);
   const videoRef = useRef(null);
 
@@ -39,13 +39,19 @@ function VideoPlayer({ videoUrl, apiBaseUrl }) {
     console.error("Video playback error:", e);
     setLoading(false);
     setIsPlaying(false);
-    setError("Failed to load video. Please try again.");
+    setError("Failed to play video in browser. You can download and play locally instead.");
   };
 
   // Get the correct video streaming URL
   const getVideoUrl = (video) => {
     if (!video) return null;
     return `${apiBaseUrl}/api/stream/${video.id}`;
+  };
+  
+  // Get the download URL
+  const getDownloadUrl = () => {
+    if (!videoUrl) return null;
+    return `${apiBaseUrl}/api/stream/${videoUrl.id}`;
   };
 
   return (
@@ -80,6 +86,19 @@ function VideoPlayer({ videoUrl, apiBaseUrl }) {
           >
             Your browser does not support the video tag.
           </video>
+          
+          {/* Always show download button */}
+          <div className="download-container">
+            <a 
+              href={getDownloadUrl()} 
+              download={videoUrl.name}
+              className="download-button"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Download Video
+            </a>
+          </div>
 
           <div className="video-info-box">
             {videoUrl.mimeType && (
@@ -95,6 +114,14 @@ function VideoPlayer({ videoUrl, apiBaseUrl }) {
                 <span className="detail-label">Size:</span>
                 <span className="detail-value">
                   {formatFileSize(videoUrl.size)}
+                </span>
+              </div>
+            )}
+            {videoUrl.createdTime && (
+              <div className="video-detail">
+                <span className="detail-label">Created:</span>
+                <span className="detail-value">
+                  {new Date(videoUrl.createdTime).toLocaleString()}
                 </span>
               </div>
             )}

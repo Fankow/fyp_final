@@ -90,3 +90,26 @@ video {
 .detail-value {
   color: #555;
 }
+/* Add these styles to your existing VideoPlayer.css file */
+.download-container {
+  margin-top: 15px;
+  text-align: center;
+}
+
+.download-button {
+  display: inline-block;
+  background-color: #3498db;
+  color: white;
+  padding: 8px 16px;
+  border-radius: 4px;
+  text-decoration: none;
+  font-weight: bold;
+  transition: background-color 0.2s;
+  margin-top: 10px;
+}
+
+.download-button:hover {
+  background-color: #2980b9;
+  text-decoration: none;
+  color: white;
+}
