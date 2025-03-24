@@ -6,7 +6,7 @@ function VideoList({ onVideoSelect, apiBaseUrl }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
+  const fetchVideos = () => {
     setLoading(true);
 
     // Use the provided API base URL
@@ -29,6 +29,10 @@ function VideoList({ onVideoSelect, apiBaseUrl }) {
         setError(err.message);
         setLoading(false);
       });
+  };
+
+  useEffect(() => {
+    fetchVideos();
   }, [apiBaseUrl]);
 
   // Format file size for display
@@ -49,7 +53,16 @@ function VideoList({ onVideoSelect, apiBaseUrl }) {
 
   return (
     <div className="video-list">
-      <h2>Available Videos</h2>
+      <div className="video-list-header">
+        <h2>Available Videos</h2>
+        <button 
+          className="refresh-button" 
+          onClick={fetchVideos} 
+          disabled={loading}
+        >
+          {loading ? "Refreshing..." : "Refresh"}
+        </button>
+      </div>
 
       {loading && <p className="status-message">Loading videos...</p>}
 
@@ -77,7 +90,7 @@ function VideoList({ onVideoSelect, apiBaseUrl }) {
                 <div className="video-details">
                   <span>{formatFileSize(video.size)}</span>
                   {video.createdTime && (
-                    <span> • {formatDate(video.createdTime)}</span>
+                    <span> ? {formatDate(video.createdTime)}</span>
                   )}
                 </div>
               </div>

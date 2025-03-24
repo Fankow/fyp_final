@@ -96,3 +96,30 @@
   background-color: #ffebee;
   border-radius: 4px;
 }
+
+.video-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.refresh-button {
+  background: #3498db;
+  color: white;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+  transition: background-color 0.2s;
+}
+
+.refresh-button:hover {
+  background: #2980b9;
+}
+
+.refresh-button:disabled {
+  background: #95a5a6;
+  cursor: not-allowed;
+}

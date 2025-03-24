@@ -1,6 +1,6 @@
 import cv2
 import time
-import numpy np
+import numpy as np
 from ultralytics import YOLO
 import threading
 import socketio
@@ -12,6 +12,7 @@ import os
 from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
@@ -54,7 +55,7 @@ upload_queue = queue.Queue()
 # Google Drive upload settings
 SCOPES = ['https://www.googleapis.com/auth/drive']
 PARENT_FOLDER_ID = "16gNhmALfjDGkLumAcNAPzHIkvSs1OSi7"
-SERVICE_ACCOUNT_FILE = 'service_account.json'
+SERVICE_ACCOUNT_FILE = 'backend/credentials.json'
 
 # For FPS calculation
 class FPSCounter:
@@ -123,6 +124,7 @@ def ensure_recording_dir():
         logger.info(f"Created recording directory: {recording_dir}")
 
 # Initialize or update video writer
+# Initialize or update video writer
 def get_video_writer(frame):
     global video_writer, record_start_time
     
@@ -134,10 +136,8 @@ def get_video_writer(frame):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         video_path = os.path.join(recording_dir, f"detection_{timestamp}.mp4")
         
-        # Use H.264 codec for better compatibility and smaller file size
+        # Use mp4v codec - more widely supported
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        
-        # Create VideoWriter with 20 FPS (adjust as needed)
         video_writer = cv2.VideoWriter(video_path, fourcc, 20, (w, h))
         record_start_time = time.time()
         
@@ -151,15 +151,33 @@ def stop_recording():
     global video_writer, recording, record_start_time
     
     if video_writer is not None:
-        video_path = os.path.join(recording_dir, 
-                                  [f for f in os.listdir(recording_dir) 
-                                   if f.startswith('detection_')][-1])
+        # Find the most recent recording file by sorting the files by creation time
+        recording_files = [f for f in os.listdir(recording_dir) if f.startswith('detection_')]
         
+        if recording_files:
+            # Sort files by creation time (newest first)
+            recording_files.sort(key=lambda f: os.path.getctime(os.path.join(recording_dir, f)), reverse=True)
+            latest_file = recording_files[0]
+            video_path = os.path.join(recording_dir, latest_file)
+            
+            logger.info(f"Finalizing recording: {latest_file}")
+        else:
+            # Fallback if no files found (shouldn't happen)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            video_path = os.path.join(recording_dir, f"detection_{timestamp}_final.mp4")
+            logger.warning(f"No existing recording files found, using: {video_path}")
+        
+        # Release the video writer
         video_writer.release()
         video_writer = None
         recording = False
         
-        duration = time.time() - record_start_time
+        # Calculate duration
+        duration = 0
+        if record_start_time is not None:
+            duration = time.time() - record_start_time
+            record_start_time = None
+        
         logger.info(f"Stopped recording. Duration: {duration:.2f}s")
         
         # Add to upload queue
@@ -167,6 +185,7 @@ def stop_recording():
         
         return video_path
     
+    return None
     return None
 
 # Simple Google Drive authentication
@@ -203,14 +222,37 @@ def upload_to_drive(file_path):
             'parents': [PARENT_FOLDER_ID]
         }
         
-        # Upload the file
+        # Create proper MediaFileUpload with MIME type
+        media = MediaFileUpload(
+            file_path,
+            mimetype='video/mp4',
+            resumable=True
+        )
+        
+        # Upload the file with proper MediaFileUpload
         logger.info(f"Uploading {file_name} to Google Drive...")
         file = service.files().create(
             body=file_metadata,
-            media_body=file_path
+            media_body=media,
+            fields='id,name,mimeType'
         ).execute()
         
-        logger.info(f"Successfully uploaded file ID: {file.get('id')}")
+        logger.info(f"Successfully uploaded file: {file.get('name')} (ID: {file.get('id')}, Type: {file.get('mimeType')})")
+        
+        # Set permissions to make file public for easier playback
+        try:
+            permission = {
+                'type': 'anyone',
+                'role': 'reader'
+            }
+            service.permissions().create(
+                fileId=file.get('id'),
+                body=permission
+            ).execute()
+            logger.info(f"Set public read permissions for {file.get('name')}")
+        except Exception as e:
+            logger.warning(f"Failed to set permissions: {e}")
+        
         return True
         
     except Exception as e:
@@ -249,7 +291,7 @@ def upload_thread():
 
 # Inference thread function - separates detection from capture
 def inference_thread(model):
-    global processing_frame, current_results, running, recording, last_detection_time
+    global processing_frame, current_results, running, recording, last_detection_time, record_start_time
     
     logger.info("Inference thread started")
     
@@ -297,6 +339,8 @@ def inference_thread(model):
                         if not recording:
                             logger.info(f"High confidence object detected ({high_conf_detections} objects with conf >= {RECORD_CONFIDENCE_THRESHOLD})")
                             recording = True
+                            # Initialize record_start_time when starting recording (important fix)
+                            record_start_time = time.time()
                             ensure_recording_dir()
             else:
                 # Reset the counter if no high confidence detections in this frame
@@ -448,6 +492,12 @@ def recording_manager_thread():
             with record_lock:
                 if recording:
                     current_time = time.time()
+                    
+                    # Safety check: ensure record_start_time is not None
+                    if record_start_time is None:
+                        record_start_time = current_time
+                        logger.warning("record_start_time was None, initializing it now")
+                    
                     time_since_detection = current_time - last_detection_time
                     recording_duration = current_time - record_start_time
                     
