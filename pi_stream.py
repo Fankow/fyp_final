@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 # Create a queue for frames - increased size for smoother streaming
-frame_queue = queue.Queue(maxsize=10)
+frame_queue = queue.Queue(maxsize=15)
 
 # Initialize Socket.IO client with optimized settings
 sio = socketio.Client(reconnection=True, 
@@ -56,7 +56,7 @@ class FPSCounter:
 
 # Rate limiter for sending frames
 class RateLimiter:
-    def __init__(self, max_rate=5):  # Default to 5 FPS max send rate
+    def __init__(self, max_rate=10):  # Default to 5 FPS max send rate
         self.max_rate = max_rate
         self.last_send_time = 0
         
@@ -139,7 +139,7 @@ def send_frames_thread():
     frames_sent = 0
     
     # Create rate limiter - set to 5 FPS to prevent overwhelming the server
-    rate_limiter = RateLimiter(max_rate=4)  # Only send up to 5 frames per second
+    rate_limiter = RateLimiter(max_rate=6)  # Only send up to 5 frames per second
     
     logger.info("Send thread started")
     
@@ -220,7 +220,7 @@ def send_frames_thread():
                 )
                 
                 # Encode frame as JPEG with lower quality for faster transmission
-                _, buffer = cv2.imencode('.jpg', local_frame, [cv2.IMWRITE_JPEG_QUALITY, 40])
+                _, buffer = cv2.imencode('.jpg', local_frame, [cv2.IMWRITE_JPEG_QUALITY, 30])
                 frame_base64 = base64.b64encode(buffer).decode('utf-8')
                 
                 # Send the frame through Socket.IO - use simple try/except
@@ -376,7 +376,7 @@ def main():
             logger.error("Failed to initialize YOLO model")
             return
         
-        url = 'https://1987-218-102-205-108.ngrok-free.app'
+        url = 'https://1c45ac72026a.ngrok.app'
         
         # Start threads
         threads = []
