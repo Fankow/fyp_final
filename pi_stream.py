@@ -6,7 +6,6 @@ import threading
 import socketio
 import base64
 import logging
-import subprocess
 import queue
 from collections import deque
 import os
@@ -14,6 +13,9 @@ from datetime import datetime
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+import serial
+from serial.tools import list_ports
+import subprocess
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
@@ -58,6 +60,13 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 PARENT_FOLDER_ID = "16gNhmALfjDGkLumAcNAPzHIkvSs1OSi7"
 SERVICE_ACCOUNT_FILE = 'backend/credentials.json'
 
+# PTZ Control variables
+ptz_enabled = False
+ptz_lock = threading.Lock()
+ptz_controller = None
+last_ptz_command_time = 0
+ptz_command_cooldown = 0.5  # seconds between PTZ commands to prevent overloading
+
 # For FPS calculation
 class FPSCounter:
     def __init__(self, num_frames=30):
@@ -77,7 +86,7 @@ class FPSCounter:
 
 # Rate limiter for sending frames
 class RateLimiter:
-    def __init__(self, max_rate=10):  # Default to 5 FPS max send rate
+    def __init__(self, max_rate=10):  # Default to 10 FPS max send rate
         self.max_rate = max_rate
         self.last_send_time = 0
         
@@ -87,6 +96,229 @@ class RateLimiter:
             self.last_send_time = current_time
             return True
         return False
+
+# Class for PTZ camera control using PelcoD protocol
+class PelcoD:
+    def __init__(self, address=0x01, port=None, baudrate=9600):
+        self.address = address
+        self.port = port
+        self.baudrate = baudrate
+        self.serial = None
+        self.connected = False
+        
+    def scan_for_ports(self):
+        """Scan and return available serial ports"""
+        ports = []
+        try:
+            available_ports = list_ports.comports()
+            if available_ports:
+                for port in available_ports:
+                    ports.append({
+                        'device': port.device,
+                        'description': port.description,
+                        'hwid': port.hwid
+                    })
+                logger.info(f"Found {len(ports)} serial port(s)")
+                return ports
+            else:
+                logger.warning("No serial ports found")
+                return []
+        except Exception as e:
+            logger.error(f"Error scanning for serial ports: {e}")
+            return []
+    
+    def test_connection(self, port, baudrate=9600, timeout=0.5):
+        """Test if a port can be opened and potentially has a PTZ camera"""
+        try:
+            # Try to open the port
+            ser = serial.Serial(port, baudrate, timeout=timeout)
+            
+            # Send a stop command (common to most PTZ protocols)
+            stop_cmd = bytearray([0xFF, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01])
+            ser.write(stop_cmd)
+            
+            # Try to read any response (might be none)
+            response = ser.read(8)
+            
+            # Close the port
+            ser.close()
+            
+            return True
+            
+        except serial.SerialException as e:
+            logger.debug(f"Port {port} test failed: {e}")
+            return False
+        except Exception as e:
+            logger.debug(f"Error testing port {port}: {e}")
+            return False
+    
+    def connect(self, validate=True):
+        """Try to connect to the PTZ camera with validation"""
+        try:
+            # If no port is specified, try auto-detection
+            if not self.port:
+                ports = self.scan_for_ports()
+                if not ports:
+                    logger.warning("No serial ports found for PTZ camera")
+                    return False
+                
+                # Try each port until we find one that works
+                if validate:
+                    logger.info("Testing available ports for PTZ camera...")
+                    for port_info in ports:
+                        port = port_info['device']
+                        logger.info(f"Testing port: {port} ({port_info['description']})")
+                        
+                        if self.test_connection(port):
+                            logger.info(f"Port {port} appears to work. Will use this port.")
+                            self.port = port
+                            break
+                    
+                    if not self.port:
+                        logger.warning("No responding PTZ camera found on any port")
+                        return False
+                else:
+                    # Just use the first port without validation
+                    self.port = ports[0]['device']
+                    logger.info(f"Auto-selected serial port: {self.port} (validation skipped)")
+            
+            # Try to open the selected port
+            self.serial = serial.Serial(self.port, self.baudrate, timeout=1)
+            self.connected = True
+            
+            # Send a stop command to initialize the camera
+            self.stop_action()
+            
+            logger.info(f"PTZ camera connected on {self.port} at {self.baudrate} baud")
+            return True
+            
+        except serial.SerialException as e:
+            logger.error(f"Failed to connect to PTZ camera: {e}")
+            self.connected = False
+            return False
+        except Exception as e:
+            logger.error(f"Error connecting to PTZ camera: {e}")
+            self.connected = False
+            return False
+    
+    def set_address(self, address):
+        """Set the camera address"""
+        self.address = address
+    
+    def send_command(self, command):
+        """Send a command to the PTZ camera using PelcoD protocol"""
+        if not self.connected or not self.serial:
+            logger.debug("Cannot send PTZ command - not connected")
+            return False
+            
+        try:
+            # Construct the PelcoD message format
+            # [Sync byte, Address, Command1, Command2, Data1, Data2, Checksum]
+            msg = [0xFF, self.address] + command + [self.calculate_checksum(command)]
+            
+            # Convert to bytearray and send
+            msg_bytes = bytearray(msg)
+            logger.debug(f"Sending PTZ command: {msg_bytes.hex()}")
+            self.serial.write(msg_bytes)
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error sending PTZ command: {e}")
+            return False
+    
+    def calculate_checksum(self, command):
+        """Calculate the PelcoD checksum"""
+        return (self.address + sum(command)) % 256
+    
+    def stop_action(self):
+        """Stop all PTZ movement"""
+        if self.connected:
+            logger.info("PTZ: Stopping all movement")
+            return self.send_command([0x00, 0x00, 0x00, 0x00])
+        return False
+    
+    def pan_left(self, speed=0xFF):
+        """Pan the camera left at the specified speed"""
+        if self.connected:
+            logger.info(f"PTZ: Panning LEFT at speed {speed}")
+            return self.send_command([0x00, 0x04, speed, 0x00])
+        return False
+    
+    def pan_right(self, speed=0xFF):
+        """Pan the camera right at the specified speed"""
+        if self.connected:
+            logger.info(f"PTZ: Panning RIGHT at speed {speed}")
+            return self.send_command([0x00, 0x02, speed, 0x00])
+        return False
+    
+    def tilt_up(self, speed=0xFF):
+        """Tilt the camera up at the specified speed"""
+        if self.connected:
+            logger.info(f"PTZ: Tilting UP at speed {speed}")
+            return self.send_command([0x00, 0x08, 0x00, speed])
+        return False
+    
+    def tilt_down(self, speed=0xFF):
+        """Tilt the camera down at the specified speed"""
+        if self.connected:
+            logger.info(f"PTZ: Tilting DOWN at speed {speed}")
+            return self.send_command([0x00, 0x10, 0x00, speed])
+        return False
+    
+    def test_ptz_functionality(self):
+        """Test if the PTZ camera responds to commands"""
+        if not self.connected:
+            logger.warning("Cannot test PTZ functionality - not connected")
+            return False
+        
+        try:
+            logger.info("Testing PTZ functionality...")
+            
+            # Test sequence: pan left briefly, then stop
+            success = self.pan_left(0x40)  # Half speed
+            time.sleep(0.5)
+            self.stop_action()
+            time.sleep(0.5)
+            
+            # Test pan right briefly, then stop
+            success = success and self.pan_right(0x40)
+            time.sleep(0.5)
+            self.stop_action()
+            time.sleep(0.5)
+            
+            # Test tilt up briefly, then stop
+            success = success and self.tilt_up(0x40)
+            time.sleep(0.5)
+            self.stop_action()
+            time.sleep(0.5)
+            
+            # Test tilt down briefly, then stop
+            success = success and self.tilt_down(0x40)
+            time.sleep(0.5)
+            self.stop_action()
+            
+            if success:
+                logger.info("PTZ functionality test completed successfully")
+            else:
+                logger.warning("PTZ functionality test failed")
+            
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error during PTZ functionality test: {e}")
+            return False
+    
+    def close(self):
+        """Close the serial connection"""
+        if self.connected and self.serial:
+            try:
+                self.stop_action()
+                self.serial.close()
+                logger.info("PTZ camera connection closed")
+            except Exception as e:
+                logger.error(f"Error closing PTZ connection: {e}")
+            finally:
+                self.connected = False
 
 @sio.event
 def connect():
@@ -118,13 +350,276 @@ def initialize_model():
         logger.error(f"Error loading YOLO model: {e}")
         return None
 
+# Initialize PTZ controller with validation
+def initialize_ptz():
+    global ptz_enabled, ptz_controller
+    
+    try:
+        # Create PTZ controller instance
+        ptz = PelcoD()
+        
+        # Scan for available ports
+        available_ports = ptz.scan_for_ports()
+        
+        # If no ports found, inform the user
+        if not available_ports:
+            print("\n==== PTZ Camera Setup ====")
+            print("No serial ports detected on this system.")
+            choice = input("Do you want to continue without PTZ camera control? (y/n, default: y): ").strip().lower()
+            if choice == 'n':
+                logger.error("User cancelled without PTZ support")
+                return False
+            else:
+                logger.info("Continuing without PTZ support")
+                ptz_enabled = False
+                return True
+        
+        # Display available ports to the user
+        print("\n==== PTZ Camera Setup ====")
+        print("Available serial ports:")
+        for i, port in enumerate(available_ports):
+            print(f"{i+1}. {port['device']} - {port['description']}")
+        
+        # Ask if user wants to enable PTZ control
+        print("\nDo you want to enable PTZ camera control?")
+        choice = input("Enable PTZ control? (y/n, default: n): ").strip().lower()
+        
+        if choice != 'y':
+            logger.info("PTZ control disabled by user choice")
+            ptz_enabled = False
+            return True
+        
+        # Ask user to select a port or auto-detect
+        print("\nPlease select a serial port for PTZ camera:")
+        print("0. Auto-detect (recommended)")
+        for i, port in enumerate(available_ports):
+            print(f"{i+1}. {port['device']} - {port['description']}")
+        
+        port_choice = input("Enter selection (default: 0): ").strip()
+        
+        # Default to auto-detect if no input
+        if not port_choice:
+            port_choice = "0"
+            
+        # Parse the input
+        try:
+            port_idx = int(port_choice)
+            if port_idx == 0:
+                # Auto-detect mode
+                print("Attempting to auto-detect PTZ camera...")
+                ptz.port = None  # Will trigger auto-detection
+            elif 1 <= port_idx <= len(available_ports):
+                # User selected a specific port
+                ptz.port = available_ports[port_idx-1]['device']
+                print(f"Selected port: {ptz.port}")
+            else:
+                # Invalid selection, fall back to auto-detect
+                print("Invalid selection, using auto-detect...")
+                ptz.port = None
+        except ValueError:
+            # Non-numeric input, fall back to auto-detect
+            print("Invalid input, using auto-detect...")
+            ptz.port = None
+            
+        # Ask for baudrate
+        print("\nPlease select baudrate for PTZ camera:")
+        print("1. 2400 baud")
+        print("2. 4800 baud")
+        print("3. 9600 baud (common)")
+        print("4. 19200 baud")
+        print("5. 38400 baud")
+        print("6. 57600 baud")
+        print("7. 115200 baud")
+        
+        baud_choice = input("Enter selection (default: 3): ").strip()
+        
+        # Parse baudrate selection
+        baudrates = [2400, 4800, 9600, 19200, 38400, 57600, 115200]
+        try:
+            baud_idx = int(baud_choice) if baud_choice else 3
+            if 1 <= baud_idx <= len(baudrates):
+                ptz.baudrate = baudrates[baud_idx-1]
+            else:
+                ptz.baudrate = 9600  # Default
+            print(f"Using baudrate: {ptz.baudrate}")
+        except ValueError:
+            ptz.baudrate = 9600  # Default
+            print("Invalid input, using default baudrate: 9600")
+            
+        # Try to connect
+        print("\nConnecting to PTZ camera...")
+        if ptz.connect():
+            print("PTZ camera connected successfully.")
+            
+            # Ask if user wants to test PTZ functionality
+            test_choice = input("Do you want to test PTZ movement? (y/n, default: y): ").strip().lower()
+            if test_choice != 'n':
+                if ptz.test_ptz_functionality():
+                    print("PTZ movement test successful!")
+                else:
+                    print("PTZ movement test failed. The camera might not be responding properly.")
+                    print("Would you like to continue anyway?")
+                    continue_choice = input("Continue with PTZ? (y/n, default: n): ").strip().lower()
+                    if continue_choice != 'y':
+                        ptz.close()
+                        ptz_enabled = False
+                        return True
+            
+            # PTZ connection successful
+            ptz_controller = ptz
+            ptz_enabled = True
+            print("\nPTZ camera successfully initialized.")
+            logger.info("PTZ controller initialized and tested successfully")
+            return True
+        else:
+            print("Failed to connect to PTZ camera.")
+            retry = input("Would you like to continue without PTZ control? (y/n, default: y): ").strip().lower()
+            if retry == 'n':
+                logger.error("User cancelled without PTZ support")
+                return False
+            else:
+                logger.info("Continuing without PTZ control")
+                ptz_enabled = False
+                return True
+                
+    except Exception as e:
+        logger.error(f"Error initializing PTZ controller: {e}")
+        print(f"Error initializing PTZ controller: {e}")
+        print("Continuing without PTZ control")
+        ptz_enabled = False
+        return True
+
+# Function to control PTZ movement based on object position
+def control_ptz_by_object_position(frame, boxes, confidence_threshold=0.65):
+    global ptz_enabled, ptz_controller, last_ptz_command_time
+    
+    # Return if PTZ is not enabled
+    if not ptz_enabled or ptz_controller is None:
+        return
+        
+    # Get current time for command rate limiting
+    current_time = time.time()
+    if current_time - last_ptz_command_time < ptz_command_cooldown:
+        return
+        
+    # Get frame dimensions
+    h, w = frame.shape[:2]
+    center_x = w / 2
+    center_y = h / 2
+    
+    # Define movement zones - divide frame into 3x3 grid
+    # Horizontal zones
+    left_boundary = w / 3
+    right_boundary = w * 2 / 3
+    
+    # Vertical zones
+    top_boundary = h / 3
+    bottom_boundary = h * 2 / 3
+    
+    # Find the highest confidence box above threshold
+    best_box = None
+    best_confidence = confidence_threshold
+    
+    for box in boxes:
+        if box.conf[0] >= best_confidence and box.cls[0] == 0:  # Class 0 is person
+            best_box = box
+            best_confidence = box.conf[0]
+    
+    # If no suitable box is found, do not move
+    if best_box is None:
+        return
+        
+    # Calculate the center of the detection box
+    x1, y1, x2, y2 = best_box.xyxy[0]
+    object_center_x = (x1 + x2) / 2
+    object_center_y = (y1 + y2) / 2
+    
+    # Determine movement direction based on object position
+    with ptz_lock:
+        if object_center_x < left_boundary:
+            # Object is in the left zone
+            if object_center_y < top_boundary:
+                # Top-left zone
+                logger.info("PTZ tracking: Object in top-left zone")
+                ptz_controller.pan_left()
+                time.sleep(0.2)
+                ptz_controller.stop_action()
+                time.sleep(0.1)
+                ptz_controller.tilt_up()
+                time.sleep(0.2)
+                ptz_controller.stop_action()
+            elif object_center_y > bottom_boundary:
+                # Bottom-left zone
+                logger.info("PTZ tracking: Object in bottom-left zone")
+                ptz_controller.pan_left()
+                time.sleep(0.2)
+                ptz_controller.stop_action()
+                time.sleep(0.1)
+                ptz_controller.tilt_down()
+                time.sleep(0.2)
+                ptz_controller.stop_action()
+            else:
+                # Middle-left zone
+                logger.info("PTZ tracking: Object in middle-left zone")
+                ptz_controller.pan_left()
+                time.sleep(0.2)
+                ptz_controller.stop_action()
+        elif object_center_x > right_boundary:
+            # Object is in the right zone
+            if object_center_y < top_boundary:
+                # Top-right zone
+                logger.info("PTZ tracking: Object in top-right zone")
+                ptz_controller.pan_right()
+                time.sleep(0.2)
+                ptz_controller.stop_action()
+                time.sleep(0.1)
+                ptz_controller.tilt_up()
+                time.sleep(0.2)
+                ptz_controller.stop_action()
+            elif object_center_y > bottom_boundary:
+                # Bottom-right zone
+                logger.info("PTZ tracking: Object in bottom-right zone")
+                ptz_controller.pan_right()
+                time.sleep(0.2)
+                ptz_controller.stop_action()
+                time.sleep(0.1)
+                ptz_controller.tilt_down()
+                time.sleep(0.2)
+                ptz_controller.stop_action()
+            else:
+                # Middle-right zone
+                logger.info("PTZ tracking: Object in middle-right zone")
+                ptz_controller.pan_right()
+                time.sleep(0.2)
+                ptz_controller.stop_action()
+        else:
+            # Object is in the middle horizontal zone
+            if object_center_y < top_boundary:
+                # Top-middle zone
+                logger.info("PTZ tracking: Object in top-middle zone")
+                ptz_controller.tilt_up()
+                time.sleep(0.2)
+                ptz_controller.stop_action()
+            elif object_center_y > bottom_boundary:
+                # Bottom-middle zone
+                logger.info("PTZ tracking: Object in bottom-middle zone")
+                ptz_controller.tilt_down()
+                time.sleep(0.2)
+                ptz_controller.stop_action()
+            else:
+                # Center zone - no movement needed
+                logger.debug("PTZ tracking: Object in center zone - no movement needed")
+                pass
+    
+    # Update the last command time
+    last_ptz_command_time = current_time
+
 # Make sure recording directory exists
 def ensure_recording_dir():
     if not os.path.exists(recording_dir):
         os.makedirs(recording_dir)
         logger.info(f"Created recording directory: {recording_dir}")
 
-# Initialize or update video writer
 # Initialize or update video writer
 def get_video_writer(frame):
     global video_writer, record_start_time
@@ -187,7 +682,6 @@ def stop_recording():
         return video_path
     
     return None
-    return None
 
 # Simple Google Drive authentication
 def authenticate_drive():
@@ -198,6 +692,80 @@ def authenticate_drive():
     except Exception as e:
         logger.error(f"Authentication error: {e}")
         return None
+
+# Simplified Google Drive upload function
+def upload_to_drive(file_path):
+    try:
+        if not os.path.exists(file_path):
+            logger.error(f"File not found: {file_path}")
+            return False
+            
+        if not os.path.exists(SERVICE_ACCOUNT_FILE):
+            logger.error(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
+            return False
+            
+        credentials = authenticate_drive()
+        if credentials is None:
+            return False
+        
+        # Convert the video to web format before uploading
+        web_compatible_path = convert_to_web_format(file_path)
+        upload_path = web_compatible_path  # Use the converted file
+            
+        service = build('drive', 'v3', credentials=credentials)
+        
+        file_name = os.path.basename(upload_path)
+        
+        file_metadata = {
+            'name': file_name,
+            'parents': [PARENT_FOLDER_ID],
+            'mimeType': 'video/mp4'  # Explicitly set MIME type
+        }
+        
+        # Create proper MediaFileUpload with MIME type
+        media = MediaFileUpload(
+            upload_path,
+            mimetype='video/mp4',
+            resumable=True
+        )
+        
+        # Upload the file with proper MediaFileUpload
+        logger.info(f"Uploading {file_name} to Google Drive...")
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id,name,mimeType'
+        ).execute()
+        
+        logger.info(f"Successfully uploaded file: {file.get('name')} (ID: {file.get('id')}, Type: {file.get('mimeType')})")
+        
+        # Set permissions to make file public for easier playback
+        try:
+            permission = {
+                'type': 'anyone',
+                'role': 'reader'
+            }
+            service.permissions().create(
+                fileId=file.get('id'),
+                body=permission
+            ).execute()
+            logger.info(f"Set public read permissions for {file.get('name')}")
+        except Exception as e:
+            logger.warning(f"Failed to set permissions: {e}")
+        
+        # Clean up the converted file if it's different from the original
+        if web_compatible_path != file_path and os.path.exists(web_compatible_path):
+            try:
+                os.remove(web_compatible_path)
+                logger.info(f"Removed temporary converted file: {os.path.basename(web_compatible_path)}")
+            except Exception as e:
+                logger.warning(f"Failed to remove temporary file: {e}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error uploading to Google Drive: {e}")
+        return False
 
 # Simplified Google Drive upload function
 def upload_to_drive(file_path):
@@ -405,6 +973,10 @@ def inference_thread(model):
                             # Initialize record_start_time when starting recording (important fix)
                             record_start_time = time.time()
                             ensure_recording_dir()
+                            
+                    # Control PTZ if enabled
+                    if ptz_enabled and ptz_controller and result.boxes:
+                        control_ptz_by_object_position(frame_to_process, result.boxes, RECORD_CONFIDENCE_THRESHOLD)
             else:
                 # Reset the counter if no high confidence detections in this frame
                 high_confidence_frames = 0
@@ -420,7 +992,7 @@ def inference_thread(model):
 
 # Frame encoding and sending thread
 def send_frames_thread():
-    global running, current_results, current_frame, model
+    global running, current_results, current_frame, model, ptz_enabled
     
     fps_counter = FPSCounter()
     last_send_time = time.time()
@@ -461,6 +1033,18 @@ def send_frames_thread():
             
             # Process the frame with YOLO results
             if local_frame is not None:
+                # Draw grid lines for PTZ zones if enabled
+                if ptz_enabled:
+                    h, w = local_frame.shape[:2]
+                    
+                    # Horizontal grid lines (at 1/3 and 2/3 of height)
+                    cv2.line(local_frame, (0, int(h/3)), (w, int(h/3)), (0, 0, 255), 1)
+                    cv2.line(local_frame, (0, int(2*h/3)), (w, int(2*h/3)), (0, 0, 255), 1)
+                    
+                    # Vertical grid lines (at 1/3 and 2/3 of width)
+                    cv2.line(local_frame, (int(w/3), 0), (int(w/3), h), (0, 0, 255), 1)
+                    cv2.line(local_frame, (int(2*w/3), 0), (int(2*w/3), h), (0, 0, 255), 1)
+                
                 # Draw bounding boxes if results are available
                 if local_results is not None and model is not None:
                     for result in local_results:
@@ -490,7 +1074,13 @@ def send_frames_thread():
                                     cv2.putText(local_frame, label, (x1, y1 - 5),
                                                 cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
                 
-                # Add recording indicator
+                # Add status indicators
+                # PTZ status
+                ptz_status = "PTZ: Enabled" if ptz_enabled else "PTZ: Disabled"
+                cv2.putText(local_frame, ptz_status, (10, 70), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+                
+                # Recording indicator
                 with record_lock:
                     if recording:
                         # Draw red recording circle
@@ -741,7 +1331,7 @@ def maintain_connection(url):
     
 # Main function
 def main():
-    global running, model
+    global running, model, ptz_enabled
     
     try:
         # Create recordings directory
@@ -759,6 +1349,11 @@ def main():
         model = initialize_model()
         if model is None:
             logger.error("Failed to initialize YOLO model")
+            return
+        
+        # Initialize PTZ controller with validation
+        if not initialize_ptz():
+            logger.warning("PTZ initialization was cancelled by user")
             return
         
         # Load URL from .env file
@@ -832,6 +1427,15 @@ def main():
         with record_lock:
             if recording and video_writer is not None:
                 stop_recording()
+        
+        # Close PTZ controller if enabled
+        if ptz_enabled and ptz_controller:
+            try:
+                ptz_controller.stop_action()
+                ptz_controller.close()
+                logger.info("PTZ controller closed")
+            except Exception as e:
+                logger.error(f"Error closing PTZ controller: {e}")
                 
         # Disconnect if connected
         if hasattr(sio, 'connected') and sio.connected:
