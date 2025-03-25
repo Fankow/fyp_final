@@ -1,6 +1,6 @@
 import cv2
 import time
-import numpy as np
+import numpy np
 from ultralytics import YOLO
 import threading
 import socketio
@@ -817,81 +817,7 @@ def authenticate_drive():
         logger.error(f"Authentication error: {e}")
         return None
 
-# Simplified Google Drive upload function
-def upload_to_drive(file_path):
-     try:
-         if not os.path.exists(file_path):
-             logger.error(f"File not found: {file_path}")
-             return False
- 
-         if not os.path.exists(SERVICE_ACCOUNT_FILE):
-             logger.error(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
-             return False
- 
-         credentials = authenticate_drive()
-         if credentials is None:
-             return False
-         
-         # Convert the video to web format before uploading
-         web_compatible_path = convert_to_web_format(file_path)
-         upload_path = web_compatible_path  # Use the converted file
- 
-         service = build('drive', 'v3', credentials=credentials)
- 
-         file_name = os.path.basename(upload_path)
- 
-         file_metadata = {
-             'name': file_name,
-             'parents': [PARENT_FOLDER_ID],
-             'mimeType': 'video/mp4'  # Explicitly set MIME type
-         }
- 
-         # Create proper MediaFileUpload with MIME type
-         media = MediaFileUpload(
-             upload_path,
-             mimetype='video/mp4',
-             resumable=True
-         )
- 
-         # Upload the file with proper MediaFileUpload
-         logger.info(f"Uploading {file_name} to Google Drive...")
-         file = service.files().create(
-             body=file_metadata,
-             media_body=media,
-             fields='id,name,mimeType'
-         ).execute()
- 
-         logger.info(f"Successfully uploaded file: {file.get('name')} (ID: {file.get('id')}, Type: {file.get('mimeType')})")
- 
-         # Set permissions to make file public for easier playback
-         try:
-             permission = {
-                 'type': 'anyone',
-                 'role': 'reader'
-             }
-             service.permissions().create(
-                 fileId=file.get('id'),
-                 body=permission
-             ).execute()
-             logger.info(f"Set public read permissions for {file.get('name')}")
-         except Exception as e:
-             logger.warning(f"Failed to set permissions: {e}")
- 
-         # Clean up the converted file if it's different from the original
-         if web_compatible_path != file_path and os.path.exists(web_compatible_path):
-             try:
-                 os.remove(web_compatible_path)
-                 logger.info(f"Removed temporary converted file: {os.path.basename(web_compatible_path)}")
-             except Exception as e:
-                 logger.warning(f"Failed to remove temporary file: {e}")
-         
-         return True
- 
-     except Exception as e:
-         logger.error(f"Error uploading to Google Drive: {e}")
-         return False
-     
-     # Convert video to web-friendly format
+# Fix the convert_to_web_format function and ensure it's correctly defined outside of upload_to_drive
 def convert_to_web_format(input_path):
     """Convert a video to a web-friendly format using FFmpeg."""
     try:
@@ -939,7 +865,80 @@ def convert_to_web_format(input_path):
     except Exception as e:
         logger.exception(f"Error converting video: {e}")
         return input_path
- 
+
+# Simplified Google Drive upload function
+def upload_to_drive(file_path):
+    try:
+        if not os.path.exists(file_path):
+            logger.error(f"File not found: {file_path}")
+            return False
+        
+        if not os.path.exists(SERVICE_ACCOUNT_FILE):
+            logger.error(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
+            return False
+        
+        credentials = authenticate_drive()
+        if credentials is None:
+            return False
+        
+        # Convert the video to web format before uploading
+        web_compatible_path = convert_to_web_format(file_path)
+        upload_path = web_compatible_path  # Use the converted file
+        
+        service = build('drive', 'v3', credentials=credentials)
+        
+        file_name = os.path.basename(upload_path)
+        
+        file_metadata = {
+            'name': file_name,
+            'parents': [PARENT_FOLDER_ID],
+            'mimeType': 'video/mp4'  # Explicitly set MIME type
+        }
+        
+        # Create proper MediaFileUpload with MIME type
+        media = MediaFileUpload(
+            upload_path,
+            mimetype='video/mp4',
+            resumable=True
+        )
+        
+        # Upload the file with proper MediaFileUpload
+        logger.info(f"Uploading {file_name} to Google Drive...")
+        file = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields='id,name,mimeType'
+        ).execute()
+        
+        logger.info(f"Successfully uploaded file: {file.get('name')} (ID: {file.get('id')}, Type: {file.get('mimeType')})")
+        
+        # Set permissions to make file public for easier playback
+        try:
+            permission = {
+                'type': 'anyone',
+                'role': 'reader'
+            }
+            service.permissions().create(
+                fileId=file.get('id'),
+                body=permission
+            ).execute()
+            logger.info(f"Set public read permissions for {file.get('name')}")
+        except Exception as e:
+            logger.warning(f"Failed to set permissions: {e}")
+        
+        # Clean up the converted file if it's different from the original
+        if web_compatible_path != file_path and os.path.exists(web_compatible_path):
+            try:
+                os.remove(web_compatible_path)
+                logger.info(f"Removed temporary converted file: {os.path.basename(web_compatible_path)}")
+            except Exception as e:
+                logger.warning(f"Failed to remove temporary file: {e}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error uploading to Google Drive: {e}")
+        return False
 
 # Upload thread function
 def upload_thread():
