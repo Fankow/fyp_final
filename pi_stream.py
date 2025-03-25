@@ -838,7 +838,6 @@ def upload_to_drive(file_path):
  
          service = build('drive', 'v3', credentials=credentials)
  
-         file_name = os.path.basename(file_path)
          file_name = os.path.basename(upload_path)
  
          file_metadata = {
@@ -849,7 +848,6 @@ def upload_to_drive(file_path):
  
          # Create proper MediaFileUpload with MIME type
          media = MediaFileUpload(
-             file_path,
              upload_path,
              mimetype='video/mp4',
              resumable=True
