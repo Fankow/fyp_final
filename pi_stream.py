@@ -14,6 +14,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 import serial
+import subprocess
 from serial.tools import list_ports
 
 # Configure logging
@@ -818,64 +819,130 @@ def authenticate_drive():
 
 # Simplified Google Drive upload function
 def upload_to_drive(file_path):
+     try:
+         if not os.path.exists(file_path):
+             logger.error(f"File not found: {file_path}")
+             return False
+ 
+         if not os.path.exists(SERVICE_ACCOUNT_FILE):
+             logger.error(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
+             return False
+ 
+         credentials = authenticate_drive()
+         if credentials is None:
+             return False
+         
+         # Convert the video to web format before uploading
+         web_compatible_path = convert_to_web_format(file_path)
+         upload_path = web_compatible_path  # Use the converted file
+ 
+         service = build('drive', 'v3', credentials=credentials)
+ 
+         file_name = os.path.basename(file_path)
+         file_name = os.path.basename(upload_path)
+ 
+         file_metadata = {
+             'name': file_name,
+             'parents': [PARENT_FOLDER_ID]
+             'parents': [PARENT_FOLDER_ID],
+             'mimeType': 'video/mp4'  # Explicitly set MIME type
+         }
+ 
+         # Create proper MediaFileUpload with MIME type
+         media = MediaFileUpload(
+             file_path,
+             upload_path,
+             mimetype='video/mp4',
+             resumable=True
+         )
+ 
+         # Upload the file with proper MediaFileUpload
+         logger.info(f"Uploading {file_name} to Google Drive...")
+         file = service.files().create(
+             body=file_metadata,
+             media_body=media,
+             fields='id,name,mimeType'
+         ).execute()
+ 
+         logger.info(f"Successfully uploaded file: {file.get('name')} (ID: {file.get('id')}, Type: {file.get('mimeType')})")
+ 
+         # Set permissions to make file public for easier playback
+         try:
+             permission = {
+                 'type': 'anyone',
+                 'role': 'reader'
+             }
+             service.permissions().create(
+                 fileId=file.get('id'),
+                 body=permission
+             ).execute()
+             logger.info(f"Set public read permissions for {file.get('name')}")
+         except Exception as e:
+             logger.warning(f"Failed to set permissions: {e}")
+ 
+         # Clean up the converted file if it's different from the original
+         if web_compatible_path != file_path and os.path.exists(web_compatible_path):
+             try:
+                 os.remove(web_compatible_path)
+                 logger.info(f"Removed temporary converted file: {os.path.basename(web_compatible_path)}")
+             except Exception as e:
+                 logger.warning(f"Failed to remove temporary file: {e}")
+         
+         return True
+ 
+     except Exception as e:
+         logger.error(f"Error uploading to Google Drive: {e}")
+         return False
+     
+     # Convert video to web-friendly format
+def convert_to_web_format(input_path):
+    """Convert a video to a web-friendly format using FFmpeg."""
     try:
-        if not os.path.exists(file_path):
-            logger.error(f"File not found: {file_path}")
-            return False
-            
-        if not os.path.exists(SERVICE_ACCOUNT_FILE):
-            logger.error(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
-            return False
-            
-        credentials = authenticate_drive()
-        if credentials is None:
-            return False
-            
-        service = build('drive', 'v3', credentials=credentials)
-        
-        file_name = os.path.basename(file_path)
-        
-        file_metadata = {
-            'name': file_name,
-            'parents': [PARENT_FOLDER_ID]
-        }
-        
-        # Create proper MediaFileUpload with MIME type
-        media = MediaFileUpload(
-            file_path,
-            mimetype='video/mp4',
-            resumable=True
-        )
-        
-        # Upload the file with proper MediaFileUpload
-        logger.info(f"Uploading {file_name} to Google Drive...")
-        file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id,name,mimeType'
-        ).execute()
-        
-        logger.info(f"Successfully uploaded file: {file.get('name')} (ID: {file.get('id')}, Type: {file.get('mimeType')})")
-        
-        # Set permissions to make file public for easier playback
+        # Check if FFmpeg is available on the system
         try:
-            permission = {
-                'type': 'anyone',
-                'role': 'reader'
-            }
-            service.permissions().create(
-                fileId=file.get('id'),
-                body=permission
-            ).execute()
-            logger.info(f"Set public read permissions for {file.get('name')}")
-        except Exception as e:
-            logger.warning(f"Failed to set permissions: {e}")
+            subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        except (subprocess.SubprocessError, FileNotFoundError):
+            logger.warning("FFmpeg not found, cannot convert video for web playback")
+            return input_path
         
-        return True
+        # Create web-compatible output path
+        output_path = os.path.splitext(input_path)[0] + "_web.mp4"
         
+        # Command to convert video to web-compatible format
+        # Using H.264 video codec and AAC audio codec for maximum browser compatibility
+        cmd = [
+            'ffmpeg',
+            '-i', input_path,              # Input file
+            '-c:v', 'libx264',             # H.264 video codec
+            '-profile:v', 'baseline',      # Baseline profile for maximum compatibility
+            '-level', '3.0',               # Compatible level
+            '-pix_fmt', 'yuv420p',         # Pixel format for browser compatibility
+            '-crf', '23',                  # Quality (lower is better)
+            '-preset', 'ultrafast',        # Encoding speed (faster for Raspberry Pi)
+            '-r', '30',                    # Frame rate
+            '-g', '30',                    # Keyframe interval
+            '-c:a', 'aac',                 # AAC audio codec
+            '-b:a', '128k',                # Audio bitrate
+            '-movflags', '+faststart',     # Optimize for web streaming
+            '-y',                          # Overwrite output file if exists
+            output_path
+        ]
+        
+        logger.info(f"Converting video to web-compatible format: {os.path.basename(input_path)}")
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        # Check if conversion was successful
+        if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            logger.info(f"Successfully converted video to web format: {os.path.basename(output_path)}")
+            return output_path
+        else:
+            logger.warning(f"Failed to convert video: {result.stderr.decode('utf-8')}")
+            return input_path
+            
     except Exception as e:
-        logger.error(f"Error uploading to Google Drive: {e}")
-        return False
+        logger.exception(f"Error converting video: {e}")
+        return input_path
+ 
 
 # Upload thread function
 def upload_thread():
