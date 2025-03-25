@@ -843,7 +843,6 @@ def upload_to_drive(file_path):
  
          file_metadata = {
              'name': file_name,
-             'parents': [PARENT_FOLDER_ID]
              'parents': [PARENT_FOLDER_ID],
              'mimeType': 'video/mp4'  # Explicitly set MIME type
          }
