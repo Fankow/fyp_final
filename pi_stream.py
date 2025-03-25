@@ -15,7 +15,6 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 import serial
 from serial.tools import list_ports
-import subprocess
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, 
@@ -66,6 +65,11 @@ ptz_lock = threading.Lock()
 ptz_controller = None
 last_ptz_command_time = 0
 ptz_command_cooldown = 0.5  # seconds between PTZ commands to prevent overloading
+
+# Add these to your other global variables at the top
+automatic_mode = True  # Default to automatic mode
+ptz_manual_control = None  # Who has manual PTZ control
+manual_recording_control = None  # Who has manual recording control
 
 # For FPS calculation
 class FPSCounter:
@@ -331,6 +335,125 @@ def connect_error(data):
 @sio.event
 def disconnect():
     logger.warning("Disconnected from server")
+
+# Add these event handlers after your existing socket.io event handlers
+
+@sio.event
+def ptz_command(data):
+    """Handle PTZ command from web client"""
+    global ptz_controller, ptz_enabled, ptz_manual_control
+    
+    if not ptz_enabled or ptz_controller is None:
+        logger.warning("PTZ command received but PTZ is not enabled")
+        return
+    
+    # Check if the command is from authorized client
+    client_id = data.get('clientId')
+    if ptz_manual_control and client_id != ptz_manual_control.get('clientId'):
+        logger.warning(f"Unauthorized PTZ command from {client_id}")
+        return
+    
+    direction = data.get('direction')
+    logger.info(f"Received PTZ command: {direction}")
+    
+    with ptz_lock:
+        if direction == "up":
+            ptz_controller.tilt_up()
+            time.sleep(0.3)
+            ptz_controller.stop_action()
+        elif direction == "down":
+            ptz_controller.tilt_down()
+            time.sleep(0.3)
+            ptz_controller.stop_action()
+        elif direction == "left":
+            ptz_controller.pan_left()
+            time.sleep(0.3)
+            ptz_controller.stop_action()
+        elif direction == "right":
+            ptz_controller.pan_right()
+            time.sleep(0.3)
+            ptz_controller.stop_action()
+        elif direction == "up-left":
+            ptz_controller.pan_left()
+            time.sleep(0.2)
+            ptz_controller.stop_action()
+            time.sleep(0.1)
+            ptz_controller.tilt_up()
+            time.sleep(0.2)
+            ptz_controller.stop_action()
+        elif direction == "up-right":
+            ptz_controller.pan_right()
+            time.sleep(0.2)
+            ptz_controller.stop_action()
+            time.sleep(0.1)
+            ptz_controller.tilt_up()
+            time.sleep(0.2)
+            ptz_controller.stop_action()
+        elif direction == "down-left":
+            ptz_controller.pan_left()
+            time.sleep(0.2)
+            ptz_controller.stop_action()
+            time.sleep(0.1)
+            ptz_controller.tilt_down()
+            time.sleep(0.2)
+            ptz_controller.stop_action()
+        elif direction == "down-right":
+            ptz_controller.pan_right()
+            time.sleep(0.2)
+            ptz_controller.stop_action()
+            time.sleep(0.1)
+            ptz_controller.tilt_down()
+            time.sleep(0.2)
+            ptz_controller.stop_action()
+        elif direction == "stop":
+            ptz_controller.stop_action()
+        else:
+            logger.warning(f"Unknown PTZ command: {direction}")
+
+@sio.event
+def recording_command(data):
+    """Handle recording command from web client"""
+    global recording, manual_recording_control
+    
+    # Check if the command is from authorized client
+    client_id = data.get('clientId')
+    if manual_recording_control and client_id != manual_recording_control.get('clientId'):
+        logger.warning(f"Unauthorized recording command from {client_id}")
+        return
+    
+    action = data.get('action')
+    logger.info(f"Received recording command: {action}")
+    
+    with record_lock:
+        if action == "start" and not recording:
+            # Start manual recording
+            recording = True
+            record_start_time = time.time()
+            ensure_recording_dir()
+            logger.info("Manual recording started")
+        elif action == "stop" and recording:
+            # Stop recording
+            stop_recording()
+            logger.info("Manual recording stopped")
+
+@sio.event
+def manual_mode_command(data):
+    """Handle manual mode command from web client"""
+    global automatic_mode, ptz_manual_control, manual_recording_control
+    
+    enabled = data.get('enabled', False)
+    client_id = data.get('clientId')
+    
+    if enabled:
+        logger.info(f"Manual mode enabled by client: {client_id}")
+        automatic_mode = False
+        ptz_manual_control = {'clientId': client_id, 'timestamp': time.time()}
+        manual_recording_control = {'clientId': client_id, 'timestamp': time.time()}
+    else:
+        logger.info("Manual mode disabled, returning to automatic operation")
+        automatic_mode = True
+        ptz_manual_control = None
+        manual_recording_control = None
 
 # YOLO model initialization with advanced options
 def initialize_model():
@@ -707,24 +830,19 @@ def upload_to_drive(file_path):
         credentials = authenticate_drive()
         if credentials is None:
             return False
-        
-        # Convert the video to web format before uploading
-        web_compatible_path = convert_to_web_format(file_path)
-        upload_path = web_compatible_path  # Use the converted file
             
         service = build('drive', 'v3', credentials=credentials)
         
-        file_name = os.path.basename(upload_path)
+        file_name = os.path.basename(file_path)
         
         file_metadata = {
             'name': file_name,
-            'parents': [PARENT_FOLDER_ID],
-            'mimeType': 'video/mp4'  # Explicitly set MIME type
+            'parents': [PARENT_FOLDER_ID]
         }
         
         # Create proper MediaFileUpload with MIME type
         media = MediaFileUpload(
-            upload_path,
+            file_path,
             mimetype='video/mp4',
             resumable=True
         )
@@ -753,142 +871,11 @@ def upload_to_drive(file_path):
         except Exception as e:
             logger.warning(f"Failed to set permissions: {e}")
         
-        # Clean up the converted file if it's different from the original
-        if web_compatible_path != file_path and os.path.exists(web_compatible_path):
-            try:
-                os.remove(web_compatible_path)
-                logger.info(f"Removed temporary converted file: {os.path.basename(web_compatible_path)}")
-            except Exception as e:
-                logger.warning(f"Failed to remove temporary file: {e}")
-        
         return True
         
     except Exception as e:
         logger.error(f"Error uploading to Google Drive: {e}")
         return False
-
-# Simplified Google Drive upload function
-def upload_to_drive(file_path):
-    try:
-        if not os.path.exists(file_path):
-            logger.error(f"File not found: {file_path}")
-            return False
-            
-        if not os.path.exists(SERVICE_ACCOUNT_FILE):
-            logger.error(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
-            return False
-            
-        credentials = authenticate_drive()
-        if credentials is None:
-            return False
-        
-        # Convert the video to web format before uploading
-        web_compatible_path = convert_to_web_format(file_path)
-        upload_path = web_compatible_path  # Use the converted file
-            
-        service = build('drive', 'v3', credentials=credentials)
-        
-        file_name = os.path.basename(upload_path)
-        
-        file_metadata = {
-            'name': file_name,
-            'parents': [PARENT_FOLDER_ID],
-            'mimeType': 'video/mp4'  # Explicitly set MIME type
-        }
-        
-        # Create proper MediaFileUpload with MIME type
-        media = MediaFileUpload(
-            upload_path,
-            mimetype='video/mp4',
-            resumable=True
-        )
-        
-        # Upload the file with proper MediaFileUpload
-        logger.info(f"Uploading {file_name} to Google Drive...")
-        file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id,name,mimeType'
-        ).execute()
-        
-        logger.info(f"Successfully uploaded file: {file.get('name')} (ID: {file.get('id')}, Type: {file.get('mimeType')})")
-        
-        # Set permissions to make file public for easier playback
-        try:
-            permission = {
-                'type': 'anyone',
-                'role': 'reader'
-            }
-            service.permissions().create(
-                fileId=file.get('id'),
-                body=permission
-            ).execute()
-            logger.info(f"Set public read permissions for {file.get('name')}")
-        except Exception as e:
-            logger.warning(f"Failed to set permissions: {e}")
-        
-        # Clean up the converted file if it's different from the original
-        if web_compatible_path != file_path and os.path.exists(web_compatible_path):
-            try:
-                os.remove(web_compatible_path)
-                logger.info(f"Removed temporary converted file: {os.path.basename(web_compatible_path)}")
-            except Exception as e:
-                logger.warning(f"Failed to remove temporary file: {e}")
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"Error uploading to Google Drive: {e}")
-        return False
-
-# Convert video to web-friendly format
-def convert_to_web_format(input_path):
-    """Convert a video to a web-friendly format using FFmpeg."""
-    try:
-        # Check if FFmpeg is available on the system
-        try:
-            subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        except (subprocess.SubprocessError, FileNotFoundError):
-            logger.warning("FFmpeg not found, cannot convert video for web playback")
-            return input_path
-        
-        # Create web-compatible output path
-        output_path = os.path.splitext(input_path)[0] + "_web.mp4"
-        
-        # Command to convert video to web-compatible format
-        # Using H.264 video codec and AAC audio codec for maximum browser compatibility
-        cmd = [
-            'ffmpeg',
-            '-i', input_path,              # Input file
-            '-c:v', 'libx264',             # H.264 video codec
-            '-profile:v', 'baseline',      # Baseline profile for maximum compatibility
-            '-level', '3.0',               # Compatible level
-            '-pix_fmt', 'yuv420p',         # Pixel format for browser compatibility
-            '-crf', '23',                  # Quality (lower is better)
-            '-preset', 'ultrafast',        # Encoding speed (faster for Raspberry Pi)
-            '-r', '30',                    # Frame rate
-            '-g', '30',                    # Keyframe interval
-            '-c:a', 'aac',                 # AAC audio codec
-            '-b:a', '128k',                # Audio bitrate
-            '-movflags', '+faststart',     # Optimize for web streaming
-            '-y',                          # Overwrite output file if exists
-            output_path
-        ]
-        
-        logger.info(f"Converting video to web-compatible format: {os.path.basename(input_path)}")
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
-        # Check if conversion was successful
-        if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            logger.info(f"Successfully converted video to web format: {os.path.basename(output_path)}")
-            return output_path
-        else:
-            logger.warning(f"Failed to convert video: {result.stderr.decode('utf-8')}")
-            return input_path
-            
-    except Exception as e:
-        logger.exception(f"Error converting video: {e}")
-        return input_path
 
 # Upload thread function
 def upload_thread():
@@ -921,8 +908,9 @@ def upload_thread():
     logger.info("Upload thread stopped")
 
 # Inference thread function - separates detection from capture
+# Modify your inference_thread function to respect manual mode
 def inference_thread(model):
-    global processing_frame, current_results, running, recording, last_detection_time, record_start_time
+    global processing_frame, current_results, running, recording, last_detection_time, record_start_time, automatic_mode
     
     logger.info("Inference thread started")
     
@@ -950,37 +938,66 @@ def inference_thread(model):
             # Run inference with no verbose output
             results = model(frame_rgb, verbose=False)
             
-            # Check if any objects were detected with high confidence
-            high_conf_detections = 0
-            
-            for result in results:
-                if hasattr(result, 'boxes') and hasattr(result.boxes, 'conf'):
-                    # Count detections with confidence above the recording threshold
-                    high_conf_scores = result.boxes.conf.cpu().numpy()
-                    high_conf_detections += sum(score >= RECORD_CONFIDENCE_THRESHOLD for score in high_conf_scores)
-            
-            # If we have high confidence detections, consider it for recording
-            if high_conf_detections > 0:
-                high_confidence_frames += 1
-                last_detection_time = time.time()
+            # Only handle automatic recording and PTZ if in automatic mode
+            if automatic_mode:
+                # Check if any objects were detected with high confidence
+                high_conf_detections = 0
                 
-                # Start recording if we have enough consecutive high confidence frames
-                if high_confidence_frames >= required_consecutive_frames:
-                    with record_lock:
-                        if not recording:
-                            logger.info(f"High confidence object detected ({high_conf_detections} objects with conf >= {RECORD_CONFIDENCE_THRESHOLD})")
-                            recording = True
-                            # Initialize record_start_time when starting recording (important fix)
-                            record_start_time = time.time()
-                            ensure_recording_dir()
+                for result in results:
+                    if hasattr(result, 'boxes') and hasattr(result.boxes, 'conf'):
+                        # Count detections with confidence above the recording threshold
+                        high_conf_scores = result.boxes.conf.cpu().numpy()
+                        high_conf_detections += sum(score >= RECORD_CONFIDENCE_THRESHOLD for score in high_conf_scores)
+                
+                # If we have high confidence detections, consider it for recording
+                if high_conf_detections > 0:
+                    high_confidence_frames += 1
+                    last_detection_time = time.time()
+                    
+                    # Start recording if we have enough consecutive high confidence frames
+                    if high_confidence_frames >= required_consecutive_frames:
+                        with record_lock:
+                            if not recording:
+                                logger.info(f"High confidence object detected ({high_conf_detections} objects with conf >= {RECORD_CONFIDENCE_THRESHOLD})")
+                                recording = True
+                                # Initialize record_start_time when starting recording
+                                record_start_time = time.time()
+                                ensure_recording_dir()
+                                
+                                # Let clients know recording has started
+                                try:
+                                    sio.emit('recording_status', {
+                                        'recording': True,
+                                        'manual': False
+                                    })
+                                except Exception as e:
+                                    logger.warning(f"Error sending recording status: {e}")
+                                
+                        # Control PTZ if enabled
+                        if ptz_enabled and ptz_controller and result.boxes:
+                            # Send PTZ status before moving
+                            try:
+                                sio.emit('ptz_status', {
+                                    'moving': True,
+                                    'manual': False
+                                })
+                            except Exception as e:
+                                logger.warning(f"Error sending PTZ status: {e}")
+                                
+                            control_ptz_by_object_position(frame_to_process, result.boxes, RECORD_CONFIDENCE_THRESHOLD)
                             
-                    # Control PTZ if enabled
-                    if ptz_enabled and ptz_controller and result.boxes:
-                        control_ptz_by_object_position(frame_to_process, result.boxes, RECORD_CONFIDENCE_THRESHOLD)
-            else:
-                # Reset the counter if no high confidence detections in this frame
-                high_confidence_frames = 0
-                
+                            # Send PTZ status after moving
+                            try:
+                                sio.emit('ptz_status', {
+                                    'moving': False,
+                                    'manual': False
+                                })
+                            except Exception as e:
+                                logger.warning(f"Error sending PTZ status: {e}")
+                else:
+                    # Reset the counter if no high confidence detections in this frame
+                    high_confidence_frames = 0
+            
             # Update the results (for display - this uses the regular confidence threshold)
             with results_lock:
                 current_results = results
@@ -1135,30 +1152,41 @@ def send_frames_thread():
 
 # Recording management thread
 def recording_manager_thread():
-    global running, recording, last_detection_time, video_writer, record_start_time
+    global running, recording, last_detection_time, video_writer, record_start_time, automatic_mode
     
     logger.info("Recording manager thread started")
     
     while running:
         try:
-            # Check if we're recording
-            with record_lock:
-                if recording:
-                    current_time = time.time()
-                    
-                    # Safety check: ensure record_start_time is not None
-                    if record_start_time is None:
-                        record_start_time = current_time
-                        logger.warning("record_start_time was None, initializing it now")
-                    
-                    time_since_detection = current_time - last_detection_time
-                    recording_duration = current_time - record_start_time
-                    
-                    # Stop recording if cooldown has expired and minimum duration met
-                    if (time_since_detection > recording_cooldown and 
-                        recording_duration > record_min_duration):
-                        logger.info(f"No detections for {time_since_detection:.1f}s, stopping recording")
-                        stop_recording()
+            # Only manage automatic recordings if in automatic mode
+            if automatic_mode:
+                # Check if we're recording
+                with record_lock:
+                    if recording:
+                        current_time = time.time()
+                        
+                        # Safety check: ensure record_start_time is not None
+                        if record_start_time is None:
+                            record_start_time = current_time
+                            logger.warning("record_start_time was None, initializing it now")
+                        
+                        time_since_detection = current_time - last_detection_time
+                        recording_duration = current_time - record_start_time
+                        
+                        # Stop recording if cooldown has expired and minimum duration met
+                        if (time_since_detection > recording_cooldown and 
+                            recording_duration > record_min_duration):
+                            logger.info(f"No detections for {time_since_detection:.1f}s, stopping recording")
+                            stop_recording()
+                            
+                            # Let clients know recording has stopped
+                            try:
+                                sio.emit('recording_status', {
+                                    'recording': False,
+                                    'manual': False
+                                })
+                            except Exception as e:
+                                logger.warning(f"Error sending recording status: {e}")
             
             # Sleep to prevent CPU hogging
             time.sleep(0.1)
@@ -1170,6 +1198,15 @@ def recording_manager_thread():
     with record_lock:
         if recording:
             stop_recording()
+            
+            # Let clients know recording has stopped
+            try:
+                sio.emit('recording_status', {
+                    'recording': False,
+                    'manual': False
+                })
+            except Exception as e:
+                logger.warning(f"Error sending recording status: {e}")
     
     logger.info("Recording manager thread stopped")
 
@@ -1331,7 +1368,12 @@ def maintain_connection(url):
     
 # Main function
 def main():
-    global running, model, ptz_enabled
+    global running, model, ptz_enabled, automatic_mode, ptz_manual_control, manual_recording_control
+    
+    # Initialize control variables
+    automatic_mode = True
+    ptz_manual_control = None
+    manual_recording_control = None
     
     try:
         # Create recordings directory

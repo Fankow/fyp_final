@@ -42,9 +42,9 @@ app.use(express.static(path.join(__dirname, "../frontend/build")));
   },
   allowEIO3: true,
   pingTimeout: 60000,
-  pingInterval: 25000,  // Add this line
-  path: "/socket.io",   // Make sure path is explicit
-  serveClient: false    // Don't serve client files
+  pingInterval: 25000, // Add this line
+  path: "/socket.io", // Make sure path is explicit
+  serveClient: false, // Don't serve client files
 });
 
 // Google Drive API setup
@@ -182,12 +182,139 @@ app.get("/api/stream/:id", async (req, res) => {
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.handshake.address);
 
+  // Track user control state
+  let hasControl = false; // Initially no one has control
+
   socket.on("frame", (data) => {
     io.emit("frame", data); // Broadcast frame to all clients
   });
 
+  // Handle PTZ control requests
+  socket.on("ptz_control", (direction) => {
+    // Forward PTZ control commands to the Raspberry Pi
+    io.emit("ptz_command", {
+      direction: direction,
+      clientId: socket.id,
+    });
+    console.log(`PTZ command: ${direction} from ${socket.handshake.address}`);
+  });
+
+  // Handle manual recording control
+  socket.on("recording_control", (action) => {
+    // Forward recording control commands to the Raspberry Pi
+    io.emit("recording_command", {
+      action: action,
+      clientId: socket.id,
+    });
+    console.log(
+      `Recording command: ${action} from ${socket.handshake.address}`
+    );
+  });
+
+  // Handle manual mode toggle
+  socket.on("manual_mode", (enabled) => {
+    // If requesting manual control
+    if (enabled) {
+      // Check if someone else already has control
+      const controlInfo = io.manualControlInfo || {
+        clientId: null,
+        timestamp: 0,
+      };
+
+      if (controlInfo.clientId && controlInfo.clientId !== socket.id) {
+        // Someone else has control, reject request
+        socket.emit("manual_mode_response", {
+          success: false,
+          message: "Another user currently has manual control",
+        });
+      } else {
+        // Grant control to this user
+        io.manualControlInfo = {
+          clientId: socket.id,
+          timestamp: Date.now(),
+          address: socket.handshake.address,
+        };
+
+        // Inform all clients about the change
+        io.emit("control_status_update", {
+          status: "manual",
+          controlledBy: socket.id,
+        });
+
+        // Inform the Raspberry Pi
+        io.emit("manual_mode_command", {
+          enabled: true,
+          clientId: socket.id,
+        });
+
+        // Respond to the requesting client
+        socket.emit("manual_mode_response", {
+          success: true,
+          message: "You now have manual control",
+        });
+
+        console.log(`Manual mode enabled by ${socket.handshake.address}`);
+      }
+    } else {
+      // Releasing control
+      if (io.manualControlInfo && io.manualControlInfo.clientId === socket.id) {
+        io.manualControlInfo = { clientId: null, timestamp: 0 };
+
+        // Inform all clients
+        io.emit("control_status_update", {
+          status: "automatic",
+        });
+
+        // Inform the Raspberry Pi
+        io.emit("manual_mode_command", {
+          enabled: false,
+        });
+
+        console.log(`Manual mode disabled by ${socket.handshake.address}`);
+      }
+
+      // Always respond with success when disabling
+      socket.emit("manual_mode_response", {
+        success: true,
+        message: "Manual mode disabled",
+      });
+    }
+  });
+
+  // Handle client requests for current control status
+  socket.on("get_control_status", () => {
+    if (io.manualControlInfo && io.manualControlInfo.clientId) {
+      socket.emit("control_status_update", {
+        status: "manual",
+        controlledBy: io.manualControlInfo.clientId,
+        isYou: io.manualControlInfo.clientId === socket.id,
+      });
+    } else {
+      socket.emit("control_status_update", {
+        status: "automatic",
+      });
+    }
+  });
+
   socket.on("disconnect", () => {
-    console.log("Client disconnected");
+    console.log("Client disconnected:", socket.handshake.address);
+
+    // If this client had manual control, release it
+    if (io.manualControlInfo && io.manualControlInfo.clientId === socket.id) {
+      io.manualControlInfo = { clientId: null, timestamp: 0 };
+
+      // Inform all remaining clients
+      io.emit("control_status_update", {
+        status: "automatic",
+      });
+
+      // Inform the Raspberry Pi
+      io.emit("manual_mode_command", {
+        enabled: false,
+      });
+
+      console.log(`Manual mode auto-disabled due to client disconnect`);
+    }
   });
 });
 
