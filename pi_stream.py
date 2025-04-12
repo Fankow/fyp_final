@@ -1,6 +1,6 @@
 import cv2
 import time
-import numpy np
+import numpy as np
 from ultralytics import YOLO
 import threading
 import socketio
@@ -373,43 +373,10 @@ def ptz_command(data):
         elif direction == "right":
             ptz_controller.pan_right()
             time.sleep(0.3)
-            ptz_controller.stop_action()
-        elif direction == "up-left":
-            ptz_controller.pan_left()
-            time.sleep(0.2)
-            ptz_controller.stop_action()
-            time.sleep(0.1)
-            ptz_controller.tilt_up()
-            time.sleep(0.2)
-            ptz_controller.stop_action()
-        elif direction == "up-right":
-            ptz_controller.pan_right()
-            time.sleep(0.2)
-            ptz_controller.stop_action()
-            time.sleep(0.1)
-            ptz_controller.tilt_up()
-            time.sleep(0.2)
-            ptz_controller.stop_action()
-        elif direction == "down-left":
-            ptz_controller.pan_left()
-            time.sleep(0.2)
-            ptz_controller.stop_action()
-            time.sleep(0.1)
-            ptz_controller.tilt_down()
-            time.sleep(0.2)
-            ptz_controller.stop_action()
-        elif direction == "down-right":
-            ptz_controller.pan_right()
-            time.sleep(0.2)
-            ptz_controller.stop_action()
-            time.sleep(0.1)
-            ptz_controller.tilt_down()
-            time.sleep(0.2)
-            ptz_controller.stop_action()
-        elif direction == "stop":
-            ptz_controller.stop_action()
+            ptz_controller.stop_action() 
         else:
             logger.warning(f"Unknown PTZ command: {direction}")
+            
 
 @sio.event
 def recording_command(data):

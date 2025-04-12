@@ -2,25 +2,35 @@ import React, { useState, useEffect } from "react";
 import "./ControlPanel.css";
 
 function ControlPanel({ socket, connected }) {
+  // State for manual mode toggle
   const [manualMode, setManualMode] = useState(false);
+  // State for control status (manual or automatic)
   const [controlStatus, setControlStatus] = useState("automatic");
+  // State for whether this user has control
   const [hasControl, setHasControl] = useState(false);
+  // State for control error messages
   const [controlMessage, setControlMessage] = useState("");
+  // State for recording status
   const [isRecording, setIsRecording] = useState(false);
+  // State for whether recording controls are disabled
   const [recordingDisabled, setRecordingDisabled] = useState(false);
+  // State for whether PTZ controls are disabled
   const [ptzDisabled, setPtzDisabled] = useState(false);
 
-  // Request current control status on component mount
+  // Set up event listeners when component mounts
   useEffect(() => {
     if (socket && connected) {
-      // Request current control status
+      // Ask server for current control status
       socket.emit("get_control_status");
 
-      // Set up event listeners for control status updates
+      // Listen for control status updates
       socket.on("control_status_update", (data) => {
+        // Update control status
         setControlStatus(data.status);
+        // Check if we have control
         setHasControl(data.status === "manual" && data.isYou);
 
+        // Show message if someone else has control
         if (data.status === "manual" && !data.isYou) {
           setControlMessage("Another user has manual control");
           setManualMode(false);
@@ -30,29 +40,31 @@ function ControlPanel({ socket, connected }) {
         }
       });
 
-      // Handle response to manual mode toggle
+      // Listen for response to manual mode toggle
       socket.on("manual_mode_response", (response) => {
         if (!response.success) {
-          // If request was denied, update state to reflect this
+          // Request was denied
           setManualMode(false);
           setControlMessage(response.message);
         } else {
+          // Request was successful
           setHasControl(true);
           setControlMessage(response.message);
         }
       });
 
-      // Set up listener for system recording status
+      // Listen for recording status updates
       socket.on("recording_status", (status) => {
         setIsRecording(status.recording);
         setRecordingDisabled(status.recording && !status.manual);
       });
 
-      // Set up listener for PTZ status
+      // Listen for PTZ status updates
       socket.on("ptz_status", (status) => {
         setPtzDisabled(status.moving && !status.manual);
       });
 
+      // Clean up event listeners when component unmounts
       return () => {
         socket.off("control_status_update");
         socket.off("manual_mode_response");
@@ -62,7 +74,7 @@ function ControlPanel({ socket, connected }) {
     }
   }, [socket, connected]);
 
-  // Handle manual mode toggle
+  // Toggle manual mode on/off
   const toggleManualMode = () => {
     if (socket && connected) {
       const newState = !manualMode;
@@ -71,19 +83,20 @@ function ControlPanel({ socket, connected }) {
     }
   };
 
-  // PTZ control functions
+  // Send PTZ control command
   const sendPTZCommand = (direction) => {
     if (socket && connected && hasControl && !ptzDisabled) {
       socket.emit("ptz_control", direction);
     }
   };
 
-  // Recording control functions
+  // Toggle recording on/off
   const toggleRecording = () => {
     if (socket && connected && hasControl && !recordingDisabled) {
       const action = isRecording ? "stop" : "start";
       socket.emit("recording_control", action);
-      setIsRecording(!isRecording); // Optimistic update
+      // Update UI immediately (optimistic update)
+      setIsRecording(!isRecording);
     }
   };
 
@@ -91,6 +104,7 @@ function ControlPanel({ socket, connected }) {
     <div className="control-panel">
       <h2>Control Panel</h2>
 
+      {/* Show current control status */}
       <div className="control-status">
         <p>
           System Mode:{" "}
@@ -101,6 +115,7 @@ function ControlPanel({ socket, connected }) {
         {controlMessage && <p className="control-message">{controlMessage}</p>}
       </div>
 
+      {/* Manual mode toggle button */}
       <div className="toggle-container">
         <span>Manual Control:</span>
         <button
@@ -112,6 +127,7 @@ function ControlPanel({ socket, connected }) {
         </button>
       </div>
 
+      {/* PTZ camera controls */}
       <div
         className={`ptz-controls ${
           !hasControl || ptzDisabled ? "disabled" : ""
@@ -119,13 +135,7 @@ function ControlPanel({ socket, connected }) {
       >
         <h3>PTZ Controls</h3>
         <div className="ptz-grid">
-          <button
-            className="ptz-button corner"
-            onClick={() => sendPTZCommand("up-left")}
-            disabled={!hasControl || ptzDisabled}
-          >
-            ↖
-          </button>
+          {/* Up button */}
           <button
             className="ptz-button"
             onClick={() => sendPTZCommand("up")}
@@ -133,13 +143,8 @@ function ControlPanel({ socket, connected }) {
           >
             ↑
           </button>
-          <button
-            className="ptz-button corner"
-            onClick={() => sendPTZCommand("up-right")}
-            disabled={!hasControl || ptzDisabled}
-          >
-            ↗
-          </button>
+
+          {/* Left button */}
           <button
             className="ptz-button"
             onClick={() => sendPTZCommand("left")}
@@ -147,13 +152,8 @@ function ControlPanel({ socket, connected }) {
           >
             ←
           </button>
-          <button
-            className="ptz-button center"
-            onClick={() => sendPTZCommand("stop")}
-            disabled={!hasControl || ptzDisabled}
-          >
-            ⬤
-          </button>
+
+          {/* Right button */}
           <button
             className="ptz-button"
             onClick={() => sendPTZCommand("right")}
@@ -161,13 +161,8 @@ function ControlPanel({ socket, connected }) {
           >
             →
           </button>
-          <button
-            className="ptz-button corner"
-            onClick={() => sendPTZCommand("down-left")}
-            disabled={!hasControl || ptzDisabled}
-          >
-            ↙
-          </button>
+
+          {/* Down button */}
           <button
             className="ptz-button"
             onClick={() => sendPTZCommand("down")}
@@ -175,16 +170,10 @@ function ControlPanel({ socket, connected }) {
           >
             ↓
           </button>
-          <button
-            className="ptz-button corner"
-            onClick={() => sendPTZCommand("down-right")}
-            disabled={!hasControl || ptzDisabled}
-          >
-            ↘
-          </button>
         </div>
       </div>
 
+      {/* Recording controls */}
       <div
         className={`recording-controls ${
           !hasControl || recordingDisabled ? "disabled" : ""
