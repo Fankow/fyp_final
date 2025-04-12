@@ -84,6 +84,7 @@ function App() {
   };
 
   return (
+<<<<<<< HEAD
     <div className="App">
 <<<<<<< HEAD
       <h1>Raspberry Pi Live Stream with YOLOv11</h1>
@@ -97,49 +98,65 @@ function App() {
       <header>
         <h1>Raspberry Pi Live Stream with YOLOv11</h1>
       </header>
+=======
+  <div className="App">
+    <header>
+      <h1>Raspberry Pi Live Stream with YOLOv11 and Replay System</h1>
+    </header>
+>>>>>>> ebc544e2 (fixed ui)
 
-      <div className="content">
-        <div className="left-column">
-          <div className="live-stream">
-            <h2>
-              Live Stream
-              {connected ? (
-                <span className="status connected"> (Connected)</span>
-              ) : (
-                <span className="status disconnected"> (Disconnected)</span>
-              )}
-            </h2>
-
-            {connectionError && (
-              <div className="connection-error">{connectionError}</div>
-            )}
-
-            {frame ? (
-              <img src={frame} alt="Live Feed" className="video-feed" />
+    <div className="content">
+      {/* Video players in side-by-side row */}
+      <div className="video-players-row">
+        {/* Live Stream */}
+        <div className="video-player-container">
+          <h2>
+            Live Stream
+            {connected ? (
+              <span className="status connected"> (Connected)</span>
             ) : (
-              <div className="waiting-stream">
-                <p>
-                  Waiting for stream{connected ? "..." : " (Not connected)"}
-                </p>
-              </div>
+              <span className="status disconnected"> (Disconnected)</span>
             )}
-          </div>
+          </h2>
 
-          {/* Add Control Panel Component */}
-          <ControlPanel socket={socket} connected={connected} />
+          {connectionError && (
+            <div className="connection-error">{connectionError}</div>
+          )}
+
+          {frame ? (
+            <img src={frame} alt="Live Feed" className="video-feed" />
+          ) : (
+            <div className="waiting-stream">
+              <p>
+                Waiting for stream{connected ? "..." : " (Not connected)"}
+              </p>
+            </div>
+          )}
         </div>
 
-        <div className="video-section">
+        {/* Recorded Video Player */}
+        <div className="control-panel-container">
+          <ControlPanel socket={socket} connected={connected} />
+        </div>
+      </div>
+
+      {/* Controls and Video List Row */}
+      <div className="controls-row">
+        
+        <div className="video-player-container">
+          <VideoPlayer videoUrl={selectedVideo} apiBaseUrl={getApiBaseUrl()} />
+        </div>
+        <div className="video-list-container">
           <VideoList
             onVideoSelect={setSelectedVideo}
             apiBaseUrl={getApiBaseUrl()}
           />
-          <VideoPlayer videoUrl={selectedVideo} apiBaseUrl={getApiBaseUrl()} />
         </div>
 >>>>>>> 3bf18ed9 (trying the player and rebuild all the thing)
       </div>
     </div>
-  );
+  </div>
+);
 }
 
 export default App;
