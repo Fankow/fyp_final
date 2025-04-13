@@ -5,9 +5,12 @@ STEPS FOR RUNNING THE WEB ONLINE (NOT LOCALLY)
 3.copy url and run frontend npm run build (now need to change the .env file inside the backend folder in order to change the ngrok url)
 4.copy url and run python3 pi_stream.py
 
-TODO:
-1.FETCH GOOGLE DRIVE FILES AND PLAYER FOR VIDEO (DONE)
-2.RECORD FUNCTION FOR RP AND THERMAL CAM
-3.POST REPLAY TO GOOGLE DRIVE ( HAVE CODE THAT ACHIEVE IN VSCODE WINDOWS
- SIDE , MAYBE TWEAT THE CONFIDENT RATE IN ORDER TO PREVENT CONTINUEOUS RECORDING)
-4. PTZ CONTROL
+The system uses ngrok to enable remote access without complex network configuration:
+
+1. Start the Node.js server locally (`npm start` in backend directory)
+2. Launch ngrok to create a secure tunnel (`ngrok http 3000`)
+3. Copy the generated ngrok URL to the `.env` file
+4. Build the React frontend with the ngrok URL (`npm run build`)
+5. Start the Python application on the Raspberry Pi
+
+This approach allows the surveillance system to be accessed from anywhere through a secure HTTPS connection, while the actual server runs on a local network.
