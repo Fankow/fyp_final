@@ -1,16 +1,12 @@
 
 STEPS FOR RUNNING THE WEB ONLINE (NOT LOCALLY)
-1.run backend code
-2.ngrok http 3000
-3.copy url and run frontend npm run build (now need to change the .env file inside the backend folder in order to change the ngrok url)
-4.copy url and run python3 pi_stream.py
+1.navigate to the backend folder and run node server.js
+2.ngrok http --url=fyp-web.ngrok.app 3000
+3.go to the frontend folder and run npm run build
+4.go back to root folder and run the python3 pi_stream.py 
+(make sure you have source the env for the virtual environment)
 
-The system uses ngrok to enable remote access without complex network configuration:
+You will need 4 terminals to run this program 
+and it is developed base on raspberry pi
 
-1. Start the Node.js server locally (`npm start` in backend directory)
-2. Launch ngrok to create a secure tunnel (`ngrok http 3000`)
-3. Copy the generated ngrok URL to the `.env` file
-4. Build the React frontend with the ngrok URL (`npm run build`)
-5. Start the Python application on the Raspberry Pi
 
-This approach allows the surveillance system to be accessed from anywhere through a secure HTTPS connection, while the actual server runs on a local network.
