@@ -376,6 +376,7 @@ def ptz_command(data):
             ptz_controller.stop_action() 
         else:
             logger.warning(f"Unknown PTZ command: {direction}")
+
             
 
 @sio.event
@@ -448,135 +449,45 @@ def initialize_ptz():
     try:
         # Create PTZ controller instance
         ptz = PelcoD()
+        logger.info("Starting automatic PTZ detection...")
         
         # Scan for available ports
         available_ports = ptz.scan_for_ports()
         
-        # If no ports found, inform the user
+        # If no ports found, continue without PTZ
         if not available_ports:
-            print("\n==== PTZ Camera Setup ====")
-            print("No serial ports detected on this system.")
-            choice = input("Do you want to continue without PTZ camera control? (y/n, default: y): ").strip().lower()
-            if choice == 'n':
-                logger.error("User cancelled without PTZ support")
-                return False
-            else:
-                logger.info("Continuing without PTZ support")
-                ptz_enabled = False
-                return True
-        
-        # Display available ports to the user
-        print("\n==== PTZ Camera Setup ====")
-        print("Available serial ports:")
-        for i, port in enumerate(available_ports):
-            print(f"{i+1}. {port['device']} - {port['description']}")
-        
-        # Ask if user wants to enable PTZ control
-        print("\nDo you want to enable PTZ camera control?")
-        choice = input("Enable PTZ control? (y/n, default: n): ").strip().lower()
-        
-        if choice != 'y':
-            logger.info("PTZ control disabled by user choice")
+            logger.info("No serial ports detected - continuing without PTZ support")
             ptz_enabled = False
             return True
         
-        # Ask user to select a port or auto-detect
-        print("\nPlease select a serial port for PTZ camera:")
-        print("0. Auto-detect (recommended)")
-        for i, port in enumerate(available_ports):
-            print(f"{i+1}. {port['device']} - {port['description']}")
+        # Set to auto-detect mode (port = None)
+        ptz.port = None
         
-        port_choice = input("Enter selection (default: 0): ").strip()
+        ptz.baudrate = 9600
         
-        # Default to auto-detect if no input
-        if not port_choice:
-            port_choice = "0"
-            
-        # Parse the input
-        try:
-            port_idx = int(port_choice)
-            if port_idx == 0:
-                # Auto-detect mode
-                print("Attempting to auto-detect PTZ camera...")
-                ptz.port = None  # Will trigger auto-detection
-            elif 1 <= port_idx <= len(available_ports):
-                # User selected a specific port
-                ptz.port = available_ports[port_idx-1]['device']
-                print(f"Selected port: {ptz.port}")
-            else:
-                # Invalid selection, fall back to auto-detect
-                print("Invalid selection, using auto-detect...")
-                ptz.port = None
-        except ValueError:
-            # Non-numeric input, fall back to auto-detect
-            print("Invalid input, using auto-detect...")
-            ptz.port = None
-            
-        # Ask for baudrate
-        print("\nPlease select baudrate for PTZ camera:")
-        print("1. 2400 baud")
-        print("2. 4800 baud")
-        print("3. 9600 baud (common)")
-        print("4. 19200 baud")
-        print("5. 38400 baud")
-        print("6. 57600 baud")
-        print("7. 115200 baud")
-        
-        baud_choice = input("Enter selection (default: 3): ").strip()
-        
-        # Parse baudrate selection
-        baudrates = [2400, 4800, 9600, 19200, 38400, 57600, 115200]
-        try:
-            baud_idx = int(baud_choice) if baud_choice else 3
-            if 1 <= baud_idx <= len(baudrates):
-                ptz.baudrate = baudrates[baud_idx-1]
-            else:
-                ptz.baudrate = 9600  # Default
-            print(f"Using baudrate: {ptz.baudrate}")
-        except ValueError:
-            ptz.baudrate = 9600  # Default
-            print("Invalid input, using default baudrate: 9600")
-            
-        # Try to connect
-        print("\nConnecting to PTZ camera...")
+        # Try to connect with auto-detection
         if ptz.connect():
-            print("PTZ camera connected successfully.")
+            logger.info("PTZ camera auto-detected and connected successfully")
             
-            # Ask if user wants to test PTZ functionality
-            test_choice = input("Do you want to test PTZ movement? (y/n, default: y): ").strip().lower()
-            if test_choice != 'n':
-                if ptz.test_ptz_functionality():
-                    print("PTZ movement test successful!")
-                else:
-                    print("PTZ movement test failed. The camera might not be responding properly.")
-                    print("Would you like to continue anyway?")
-                    continue_choice = input("Continue with PTZ? (y/n, default: n): ").strip().lower()
-                    if continue_choice != 'y':
-                        ptz.close()
-                        ptz_enabled = False
-                        return True
-            
-            # PTZ connection successful
-            ptz_controller = ptz
-            ptz_enabled = True
-            print("\nPTZ camera successfully initialized.")
-            logger.info("PTZ controller initialized and tested successfully")
-            return True
-        else:
-            print("Failed to connect to PTZ camera.")
-            retry = input("Would you like to continue without PTZ control? (y/n, default: y): ").strip().lower()
-            if retry == 'n':
-                logger.error("User cancelled without PTZ support")
-                return False
+            # Test PTZ functionality without asking
+            if ptz.test_ptz_functionality():
+                logger.info("PTZ functionality test successful")
+                ptz_controller = ptz
+                ptz_enabled = True
+                return True
             else:
-                logger.info("Continuing without PTZ control")
+                logger.warning("PTZ functionality test failed - continuing without PTZ")
+                ptz.close()
                 ptz_enabled = False
                 return True
+        else:
+            logger.info("PTZ auto-detection failed - continuing without PTZ")
+            ptz_enabled = False
+            return True
                 
     except Exception as e:
         logger.error(f"Error initializing PTZ controller: {e}")
-        print(f"Error initializing PTZ controller: {e}")
-        print("Continuing without PTZ control")
+        logger.info("Continuing without PTZ support")
         ptz_enabled = False
         return True
 
@@ -595,15 +506,10 @@ def control_ptz_by_object_position(frame, boxes, confidence_threshold=0.65):
         
     # Get frame dimensions
     h, w = frame.shape[:2]
-    center_x = w / 2
-    center_y = h / 2
     
     # Define movement zones - divide frame into 3x3 grid
-    # Horizontal zones
     left_boundary = w / 3
     right_boundary = w * 2 / 3
-    
-    # Vertical zones
     top_boundary = h / 3
     bottom_boundary = h * 2 / 3
     
@@ -625,6 +531,10 @@ def control_ptz_by_object_position(frame, boxes, confidence_threshold=0.65):
     object_center_x = (x1 + x2) / 2
     object_center_y = (y1 + y2) / 2
     
+    # Maximum speed for all PTZ movements
+    MAX_SPEED = 0xFF  # 255 (maximum speed in PelcoD protocol)
+    MOVE_DURATION = 0.2  # Duration for each movement
+    
     # Determine movement direction based on object position
     with ptz_lock:
         if object_center_x < left_boundary:
@@ -632,78 +542,71 @@ def control_ptz_by_object_position(frame, boxes, confidence_threshold=0.65):
             if object_center_y < top_boundary:
                 # Top-left zone
                 logger.info("PTZ tracking: Object in top-left zone")
-                ptz_controller.pan_left()
-                time.sleep(0.2)
+                ptz_controller.pan_left(MAX_SPEED)
+                time.sleep(MOVE_DURATION)
                 ptz_controller.stop_action()
-                time.sleep(0.1)
-                ptz_controller.tilt_up()
-                time.sleep(0.2)
+                time.sleep(0.05)  # Short delay between movements
+                ptz_controller.tilt_up(MAX_SPEED)
+                time.sleep(MOVE_DURATION)
                 ptz_controller.stop_action()
             elif object_center_y > bottom_boundary:
                 # Bottom-left zone
                 logger.info("PTZ tracking: Object in bottom-left zone")
-                ptz_controller.pan_left()
-                time.sleep(0.2)
+                ptz_controller.pan_left(MAX_SPEED)
+                time.sleep(MOVE_DURATION)
                 ptz_controller.stop_action()
-                time.sleep(0.1)
-                ptz_controller.tilt_down()
-                time.sleep(0.2)
+                time.sleep(0.05)
+                ptz_controller.tilt_down(MAX_SPEED)
+                time.sleep(MOVE_DURATION)
                 ptz_controller.stop_action()
             else:
                 # Middle-left zone
                 logger.info("PTZ tracking: Object in middle-left zone")
-                ptz_controller.pan_left()
-                time.sleep(0.2)
+                ptz_controller.pan_left(MAX_SPEED)
+                time.sleep(MOVE_DURATION)
                 ptz_controller.stop_action()
         elif object_center_x > right_boundary:
             # Object is in the right zone
             if object_center_y < top_boundary:
                 # Top-right zone
                 logger.info("PTZ tracking: Object in top-right zone")
-                ptz_controller.pan_right()
-                time.sleep(0.2)
+                ptz_controller.pan_right(MAX_SPEED)
+                time.sleep(MOVE_DURATION)
                 ptz_controller.stop_action()
-                time.sleep(0.1)
-                ptz_controller.tilt_up()
-                time.sleep(0.2)
+                time.sleep(0.05)
+                ptz_controller.tilt_up(MAX_SPEED)
+                time.sleep(MOVE_DURATION)
                 ptz_controller.stop_action()
             elif object_center_y > bottom_boundary:
                 # Bottom-right zone
                 logger.info("PTZ tracking: Object in bottom-right zone")
-                ptz_controller.pan_right()
-                time.sleep(0.2)
+                ptz_controller.pan_right(MAX_SPEED)
+                time.sleep(MOVE_DURATION)
                 ptz_controller.stop_action()
-                time.sleep(0.1)
-                ptz_controller.tilt_down()
-                time.sleep(0.2)
+                time.sleep(0.05)
+                ptz_controller.tilt_down(MAX_SPEED)
+                time.sleep(MOVE_DURATION)
                 ptz_controller.stop_action()
             else:
                 # Middle-right zone
                 logger.info("PTZ tracking: Object in middle-right zone")
-                ptz_controller.pan_right()
-                time.sleep(0.2)
+                ptz_controller.pan_right(MAX_SPEED)
+                time.sleep(MOVE_DURATION)
                 ptz_controller.stop_action()
         else:
             # Object is in the middle horizontal zone
             if object_center_y < top_boundary:
                 # Top-middle zone
                 logger.info("PTZ tracking: Object in top-middle zone")
-                ptz_controller.tilt_up()
-                time.sleep(0.2)
+                ptz_controller.tilt_up(MAX_SPEED)
+                time.sleep(MOVE_DURATION)
                 ptz_controller.stop_action()
             elif object_center_y > bottom_boundary:
                 # Bottom-middle zone
                 logger.info("PTZ tracking: Object in bottom-middle zone")
-                ptz_controller.tilt_down()
-                time.sleep(0.2)
+                ptz_controller.tilt_down(MAX_SPEED)
+                time.sleep(MOVE_DURATION)
                 ptz_controller.stop_action()
-            else:
-                # Center zone - no movement needed
-                logger.debug("PTZ tracking: Object in center zone - no movement needed")
-                pass
-    
-    # Update the last command time
-    last_ptz_command_time = current_time
 
 # Make sure recording directory exists
 def ensure_recording_dir():
@@ -786,125 +689,104 @@ def authenticate_drive():
 
 # Fix the convert_to_web_format function and ensure it's correctly defined outside of upload_to_drive
 def convert_to_web_format(input_path):
-    """Convert a video to a web-friendly format using FFmpeg."""
+    """Convert a video to a web-friendly format using FFmpeg, without audio processing."""
     try:
-        # Check if FFmpeg is available on the system
+        # Check if FFmpeg is available
         try:
             subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         except (subprocess.SubprocessError, FileNotFoundError):
-            logger.warning("FFmpeg not found, cannot convert video for web playback")
+            logger.warning("FFmpeg not found, skipping video conversion")
             return input_path
         
         # Create web-compatible output path
         output_path = os.path.splitext(input_path)[0] + "_web.mp4"
         
-        # Command to convert video to web-compatible format
-        # Using H.264 video codec and AAC audio codec for maximum browser compatibility
+        # Command for web compatibility - without audio processing
         cmd = [
             'ffmpeg',
             '-i', input_path,              # Input file
+            '-an',                         # No audio (skip audio processing)
             '-c:v', 'libx264',             # H.264 video codec
             '-profile:v', 'baseline',      # Baseline profile for maximum compatibility
             '-level', '3.0',               # Compatible level
             '-pix_fmt', 'yuv420p',         # Pixel format for browser compatibility
             '-crf', '23',                  # Quality (lower is better)
-            '-preset', 'ultrafast',        # Encoding speed (faster for Raspberry Pi)
+            '-preset', 'ultrafast',        # Encoding speed (faster for RPi)
             '-r', '30',                    # Frame rate
             '-g', '30',                    # Keyframe interval
-            '-c:a', 'aac',                 # AAC audio codec
-            '-b:a', '128k',                # Audio bitrate
             '-movflags', '+faststart',     # Optimize for web streaming
             '-y',                          # Overwrite output file if exists
             output_path
         ]
         
-        logger.info(f"Converting video to web-compatible format: {os.path.basename(input_path)}")
+        logger.info(f"Converting video to web format: {os.path.basename(input_path)}")
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         
-        # Check if conversion was successful
         if result.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            logger.info(f"Successfully converted video to web format: {os.path.basename(output_path)}")
+            logger.info(f"Conversion successful: {os.path.basename(output_path)}")
             return output_path
         else:
-            logger.warning(f"Failed to convert video: {result.stderr.decode('utf-8')}")
+            logger.warning(f"Conversion failed: {result.stderr.decode('utf-8')}")
             return input_path
             
     except Exception as e:
-        logger.exception(f"Error converting video: {e}")
+        logger.error(f"Error in video conversion: {e}")
         return input_path
 
 # Simplified Google Drive upload function
 def upload_to_drive(file_path):
+    """Uploads a video file to Google Drive with web format conversion."""
     try:
+        # Basic validation
         if not os.path.exists(file_path):
             logger.error(f"File not found: {file_path}")
             return False
         
-        if not os.path.exists(SERVICE_ACCOUNT_FILE):
-            logger.error(f"Service account file not found: {SERVICE_ACCOUNT_FILE}")
-            return False
+        # Authenticate
+        credentials = service_account.Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_FILE, scopes=SCOPES)
         
-        credentials = authenticate_drive()
-        if credentials is None:
-            return False
+        # Optional: Convert to web format first
+        web_path = convert_to_web_format(file_path)
+        upload_path = web_path  # Use the converted file
         
-        # Convert the video to web format before uploading
-        web_compatible_path = convert_to_web_format(file_path)
-        upload_path = web_compatible_path  # Use the converted file
-        
+        # Create the service
         service = build('drive', 'v3', credentials=credentials)
         
+        # Upload
         file_name = os.path.basename(upload_path)
-        
         file_metadata = {
             'name': file_name,
             'parents': [PARENT_FOLDER_ID],
-            'mimeType': 'video/mp4'  # Explicitly set MIME type
+            'mimeType': 'video/mp4'
         }
         
-        # Create proper MediaFileUpload with MIME type
-        media = MediaFileUpload(
-            upload_path,
-            mimetype='video/mp4',
-            resumable=True
-        )
+        media = MediaFileUpload(upload_path, mimetype='video/mp4', resumable=True)
         
-        # Upload the file with proper MediaFileUpload
         logger.info(f"Uploading {file_name} to Google Drive...")
         file = service.files().create(
             body=file_metadata,
             media_body=media,
-            fields='id,name,mimeType'
+            fields='id,name'
         ).execute()
         
-        logger.info(f"Successfully uploaded file: {file.get('name')} (ID: {file.get('id')}, Type: {file.get('mimeType')})")
+        logger.info(f"Successfully uploaded: {file.get('name')} (ID: {file.get('id')})")
         
-        # Set permissions to make file public for easier playback
-        try:
-            permission = {
-                'type': 'anyone',
-                'role': 'reader'
-            }
-            service.permissions().create(
-                fileId=file.get('id'),
-                body=permission
-            ).execute()
-            logger.info(f"Set public read permissions for {file.get('name')}")
-        except Exception as e:
-            logger.warning(f"Failed to set permissions: {e}")
+        # Set public permissions
+        permission = {'type': 'anyone', 'role': 'reader'}
+        service.permissions().create(
+            fileId=file.get('id'),
+            body=permission
+        ).execute()
         
-        # Clean up the converted file if it's different from the original
-        if web_compatible_path != file_path and os.path.exists(web_compatible_path):
-            try:
-                os.remove(web_compatible_path)
-                logger.info(f"Removed temporary converted file: {os.path.basename(web_compatible_path)}")
-            except Exception as e:
-                logger.warning(f"Failed to remove temporary file: {e}")
+        # Clean up temp file if needed
+        if web_path != file_path and os.path.exists(web_path):
+            os.remove(web_path)
         
         return True
         
     except Exception as e:
-        logger.error(f"Error uploading to Google Drive: {e}")
+        logger.error(f"Upload error: {e}")
         return False
 
 # Upload thread function
@@ -945,7 +827,7 @@ def inference_thread(model):
     logger.info("Inference thread started")
     
     # Higher confidence threshold specifically for recording decisions
-    RECORD_CONFIDENCE_THRESHOLD = 0.65  # Increased from 0.45 to 0.65
+    RECORD_CONFIDENCE_THRESHOLD = 0.5  
     
     # Counter for consecutive frames with high confidence detections
     # This helps prevent flickering recordings due to momentary detections
@@ -1330,37 +1212,6 @@ def capture_frames_thread():
         cap.release()
         logger.info("Capture thread stopped")
 
-# Load ngrok URL from backend .env file
-def load_ngrok_url_from_env():
-    """Load the ngrok URL from the backend .env file"""
-    try:
-        env_file_path = os.path.join('backend', '.env')
-        
-        # Check if the file exists
-        if not os.path.exists(env_file_path):
-            logger.warning(f"Environment file not found at {env_file_path}")
-            return None
-            
-        # Read the .env file
-        with open(env_file_path, 'r') as file:
-            for line in file:
-                # Look for the REACT_APP_NGROK_URL variable
-                if line.startswith('REACT_APP_NGROK_URL='):
-                    # Extract the URL part
-                    url = line.strip().split('=', 1)[1]
-                    # Remove quotes if present
-                    url = url.strip('"\'')
-                    if url:
-                        logger.info(f"Found ngrok URL in .env file: {url}")
-                        return url
-                        
-        logger.warning("REACT_APP_NGROK_URL not found in .env file")
-        return None
-        
-    except Exception as e:
-        logger.error(f"Error reading .env file: {e}")
-        return None
-
 # Connection management function - with backoff strategy
 def maintain_connection(url):
     global running
@@ -1409,75 +1260,50 @@ def main():
         # Create recordings directory
         ensure_recording_dir()
         
-        # Try to set process priority (Linux only)
-        try:
-            if os.name == 'posix':
-                os.system(f"renice -n -20 -p {os.getpid()}")
-                logger.info("Set high process priority")
-        except:
-            pass
-        
         # Initialize YOLO model
         model = initialize_model()
         if model is None:
             logger.error("Failed to initialize YOLO model")
             return
         
-        # Initialize PTZ controller with validation
+        # Initialize PTZ controller with automatic detection
         if not initialize_ptz():
-            logger.warning("PTZ initialization was cancelled by user")
+            logger.warning("PTZ initialization failed")
             return
         
-        # Load URL from .env file
-        default_url = load_ngrok_url_from_env()
-        
-        # Fall back to user input if .env URL not found
-        if default_url:
-            url = input(f"Enter server URL (or press Enter for {default_url}): ").strip()
-            if not url:
-                url = default_url
-        else:
-            url = input("Enter server URL (or press Enter for default): ").strip()
-            if not url:
-                url = 'https://1c45ac72026a.ngrok.app'  # Default fallback
+        server_url = 'https://fyp-web.ngrok.app/'
+
         
         # Start threads
         threads = []
         
-        # Create and start connection thread
-        conn_thread = threading.Thread(target=maintain_connection, args=(url,))
+        conn_thread = threading.Thread(target=maintain_connection, args=(server_url,))
         conn_thread.daemon = True
         conn_thread.start()
         threads.append(conn_thread)
         
-        # Wait for initial connection attempt
         time.sleep(3)
         
-        # Create and start inference thread
         infer_thread = threading.Thread(target=inference_thread, args=(model,))
         infer_thread.daemon = True
         infer_thread.start()
         threads.append(infer_thread)
         
-        # Create and start recording manager thread
         rec_manager_thread = threading.Thread(target=recording_manager_thread)
         rec_manager_thread.daemon = True
         rec_manager_thread.start()
         threads.append(rec_manager_thread)
         
-        # Create and start upload thread
         upld_thread = threading.Thread(target=upload_thread)
         upld_thread.daemon = True
         upld_thread.start()
         threads.append(upld_thread)
         
-        # Create and start capture thread
         capture_thread = threading.Thread(target=capture_frames_thread)
         capture_thread.daemon = True
         capture_thread.start()
         threads.append(capture_thread)
         
-        # Create and start send thread
         send_thread = threading.Thread(target=send_frames_thread)
         send_thread.daemon = True
         send_thread.start()
