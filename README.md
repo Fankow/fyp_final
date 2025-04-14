@@ -1,6 +1,6 @@
 CENG 4999 - Final Year Project KWS2401 – Robotic system development
 
-This project is about implementing a rodent detection model for a rodent monitoring system base on YOLOv11 This repository is the code use for the monitoring system.
+This project is about implementing a rodent detection model for a rodent monitoring system base on YOLOv11 .This repository is the code use for the monitoring system.
 
 The entire project is written with Python as the main application, Node.js and Express.js as the server incorporate with SOCKET.IO, React.js for the frontend.
 
@@ -15,6 +15,6 @@ STEPS FOR RUNNING THE WEB ONLINE (NOT LOCALLY)
 4.go back to root folder and run the python3 pi_stream.py 
 (make sure you have source the env for the virtual environment)
 
-For virtual environment, there is a requirement file for you to do the installation for package needed for this project.
+For virtual environment, there is a requirement file for you to do the installation for packages needed for this project.
 
 You will need 4 terminals to run this program.
