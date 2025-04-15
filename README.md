@@ -15,6 +15,7 @@ STEPS FOR RUNNING THE WEB ONLINE (NOT LOCALLY)
 4. go back to root folder and run the python3 pi_stream.py 
 (make sure you have source the env for the virtual environment)
 
-For virtual environment, there is a requirement file for you to do the installation for packages needed for this project.
+~~For virtual environment, there is a requirement file for you to do the installation for packages needed for this project.~~
+
 
 You will need 4 terminals to run this program.
