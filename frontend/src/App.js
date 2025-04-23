@@ -1,20 +1,10 @@
 import React, { useEffect, useState } from "react";
 import io from "socket.io-client";
-<<<<<<< HEAD
-=======
 import VideoList from "./VideoList";
 import VideoPlayer from "./VideoPlayer";
-import ControlPanel from "./ControlPanel"; // Import the new component
->>>>>>> f333e5ff (testing for manual control for frontend and multi-user control)
+import ControlPanel from "./ControlPanel"; 
 import "./App.css";
 
-<<<<<<< HEAD
-// Replace with your ngrok URL after starting ngrok
-const socket = io("https://7b25-218-102-205-108.ngrok-free.app"); // Update to ngrok URL later
-
-function App() {
-  const [frame, setFrame] = useState("");
-=======
 // For ngrok, we need to use the right URL
 let socketUrl;
 if (process.env.REACT_APP_NGROK_URL) {
@@ -40,7 +30,6 @@ function App() {
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState(null);
->>>>>>> 3bf18ed9 (trying the player and rebuild all the thing)
 
   useEffect(() => {
     socket.on("connect", () => {
